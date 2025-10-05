@@ -16,15 +16,15 @@
 #define OLED_ADDRESS 0x3C
 
 WiFiClient client;
-const char* ssid = "StuHo-WiFi";
+const char* ssid = "StuHo-WiFi"; 
 const char* password = "Only4StuHos";
-unsigned long channelID = 3095045;
+unsigned long channelID = 3095045; 
 const char* APIkey = "WKQQSKL49OZQKBB6";
 
 const char* OTA_PW = "FEIT2025";
 const char* OTA_UN = "PMS_OTA_Device";
 
-Adafruit_SSD1306 display(128,64,&Wire, -1); 
+Adafruit_SSD1306 display(128,64,&Wire, -1);  // Wire interface -> SDA = pin 21 , SCL = pin 22 (default I2C pins)
 HardwareSerial pmsSerial(2);
 
 QueueHandle_t pmsQ = NULL;
@@ -125,11 +125,11 @@ void OTAProgress(int pct) {
 
   display.fillRect(X-1,Y-1,W+2,H+2,SSD1306_BLACK); //prazen del
   display.drawRect(X-1,Y-1,W+2,H+2,SSD1306_WHITE); //border
-  int filled = (W + pct) / 100;
+  int filled = (W * pct) / 100;
   if (filled > 0) {
     display.fillRect(X,Y,filled,H,SSD1306_WHITE);
   }
-  display.setCursor(X,Y-10);
+    display.setCursor(X,Y-10);
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.print("OTA");
@@ -174,16 +174,15 @@ void DisplayTask(void *parameter) {
       display.display();
     }
     int pct;
-    while (xQueueReceive(otaQ, &pct,0) == pdTRUE) {
-      if (pct >= 0 && pct <= 100) {
+    if (xQueueReceive(otaQ, &pct, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+    if (pct >= 0 && pct <= 100) {
         OTAProgress(pct);
-      } else if (pct == -1) {
+    } else if (pct == -1) {
+        display.fillRect(0,50,128,14,SSD1306_BLACK); // clear old message
         display.setCursor(8,50);
         display.print("OTA Error");
         display.display();
-      } else if (pct == 100) {
-        OTAProgress(100);
-      }
+    }
     }
     vTaskDelay(50 / portTICK_PERIOD_MS);
   }
