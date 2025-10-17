@@ -31,7 +31,7 @@ volatile PMS_STATES fsm_state = POWERON;
 
 WiFiClient client;
 WiFiManager wm;
-WiFiManagerParameter channel_num_param; // channelID or channel number od TS
+WiFiManagerParameter channel_num_param; // channelID или channel number od TS
 WiFiManagerParameter channel_write_param; // Write key for TS
 WiFiManagerParameter channel_mode_param; // normal or fast
 //const char* ssid = "StuHo-WiFi"; 
@@ -150,7 +150,7 @@ void saveParamCallback() {
     for (int i=0;i<4;i++) 
       EEPROM.put(EEPROM_KEY_OFFSET + i, EEPROM_KEY[i]);
       params_set = true;
-      Serial.println("Parameters staged to EEPROM"); //  commit will happen in setup after autoConnect
+      Serial.println("Parameters staged to EEPROM"); //  commit za vo memorija - vo setup
 
   } else {
     Serial.println("invalid parameters");
@@ -480,7 +480,6 @@ void setup() {
   new (&channel_write_param) WiFiManagerParameter(channel_write_html);
   wm.addParameter(&channel_write_param);
 
-  // checkbox param for fast mode
   new (&channel_mode_param) WiFiManagerParameter("channelmode", "Fast Mode", "T", 1, "type=\"checkbox\"");
   wm.addParameter(&channel_mode_param);
 
@@ -498,7 +497,7 @@ void setup() {
 
   // Dokolku se popolneti informaciite za writeKey, channelID - commit - zacuvaj - promeni vo EEPROM
   if (params_set) {
-    EEPROM.commit(); // save parameters that were written by callback
+    EEPROM.commit(); 
     params_set = false;
     Serial.println("Saved parameters from portal to EEPROM");
   }
