@@ -86,6 +86,7 @@ void loadEEPROM() {
       EEPROM.get(CHANNEL_NUM_OFFSET + i, c);
       cb[i] = c;
     }
+    cb[7] = '\0';
     channelID = String(cb);
     char kb[17]; memset(kb,0,sizeof(kb));
     for (int i = 0; i<16; i++) {
@@ -93,6 +94,7 @@ void loadEEPROM() {
       EEPROM.get(CHANNEL_WRITE_OFFSET + i, c);
       kb[i] = c;
     }
+    kb[16] = '\0';
     writeKey = String(kb);
 
     int mode = 0; 
@@ -108,10 +110,10 @@ void loadEEPROM() {
 void saveEEPROM() {
   for (int i = 0; i<4; i++) EEPROM.put(EEPROM_KEY_OFFSET + i, EEPROM_KEY[i]);
   char cb[8]; memset(cb,0,sizeof(cb));
-  channelID.toCharArray(cb,8);
+  channelID.toCharArray(cb,sizeof(cb));
   for (int i = 0; i < 7; i++) EEPROM.put(CHANNEL_NUM_OFFSET + i, cb[i]);
   char kb[17]; memset(kb,0,sizeof(kb));
-  writeKey.toCharArray(kb,17);
+  writeKey.toCharArray(kb,sizeof(kb));
   for (int i = 0; i < 16; i++) EEPROM.put(CHANNEL_WRITE_OFFSET + i, kb[i]);
   EEPROM.put(CHANNEL_MODE_OFFSET, fast_mode);
   EEPROM.commit();
@@ -207,8 +209,8 @@ void OTATask(void *pvParameters) {
 void pmsTask(void *parameter) {
   uint8_t pms_buffer[31];
   const TickType_t loopDelay = pdMS_TO_TICKS(200);
-  int cyclesBeforeGet = 10; // loops to wait (10*200ms=2s)
-  int idleCycleLimit = 15; // (15*200 = 3s za idle) - na sekoi 5 sekundi citaj 
+  int cyclesBeforeGet = 25; // loops to wait (10*200ms=2s)
+  int idleCycleLimit = 35; // (15*200 = 3s za idle) - na sekoi 5 sekundi citaj 
   for(;;) {
     switch (fsm_state) {
       case POWERON:
@@ -439,6 +441,15 @@ void SerialCommandTask(void *pv) {
             Serial.println("Channel: " + channelID);
             Serial.println("Write Key: " + writeKey);
             Serial.println("Mode: " + String((fast_mode) ? "FAST":"NORMAL"));
+          } else if (input.startsWith("setkey ")) {
+              String newKey = input.substring(7);
+              if (newKey.length() == 16) {
+                writeKey = newKey;
+                saveEEPROM();
+                Serial.println("Write Key updated and saved!");
+              }  else {
+                Serial.println("Error: Write Key must be 16 chars long!");
+              } 
           } else {
             Serial.println("Commands: fast | normal | show");
           }
