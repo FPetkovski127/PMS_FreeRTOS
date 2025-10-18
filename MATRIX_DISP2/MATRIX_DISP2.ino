@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ThingSpeak.h>
 #include <Adafruit_GFX.h>
+
 #include <Adafruit_NeoMatrix.h>
 #include <Adafruit_NeoPixel.h>
 
@@ -32,13 +33,11 @@ WiFiClient client;
 unsigned long ChannelID = 3095045;
 const char *ReadKey = "JM9QEV7SW8RKWRQZ";
 
-//
-// RTOS objects
-//
+
 SemaphoreHandle_t dataMutex = NULL;
 QueueHandle_t tsQueue = NULL;          
 TaskHandle_t displayTaskHandle = NULL; // ke ni posluzi za notifikacii 
-// queue snap
+
 typedef struct {
   int temp;
   int humid;
@@ -47,189 +46,179 @@ typedef struct {
   unsigned long stamp;
 } pms_data;
 
-static const TickType_t SCROLL_DELAY_MS = 70; // zavisi od sirinata na displejot sto prikazuvame - za pomali displei podobro e pogolem delay - za poubavo da se vidi porakata
+static const TickType_t SCROLL_DELAY_MS = 60; // zavisi od sirinata na displejot sto prikazuvame - za pomali displei podobro e pogolem delay - za poubavo da se vidi porakata
 static const TickType_t TS_READ = 30000; // interval za citanje od ThingSpeak = 30sa
 
-// === WiFi maintenance task ===
-void WiFiTask(void *param) {
-  (void) param;
-  while (true) {
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.printf("WiFi: connecting to %s\n", ssid);
-      WiFi.begin(ssid, pass);
-      unsigned long t0 = millis();
-      // wait up to 10s to connect
-      while (WiFi.status() != WL_CONNECTED && (millis()-t0) < 10000) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-      }
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
-      } else {
-        Serial.println("WiFi connect attempt failed, will retry...");
-      }
-    }
-    vTaskDelay(pdMS_TO_TICKS(5000)); // proveri status na WiFi sekoi 5 sekundi 
-  }
-}
+
+  uint16_t color_temp(int t) {
+    if (t<10) return BLUE;
+    else if (t < 20) return YELLOW;
+    else if (t < 30) return ORANGE;
+    else 
+    return RED;
+  };
+  uint16_t color_humid(int h) {
+    if (h<30) return LIME;
+    else if (h < 60) return YELLOW;
+    else 
+    return ORANGE;
+  };
+  uint16_t color_PM2_5(int p) {
+    if (p < 35) return GREEN;
+    else if (p < 53) return YELLOW;
+    else if (p < 70) return ORANGE;
+    else
+    return RED;
+  };
+  uint16_t color_PM10(int p) {
+    if (p < 50) return GREEN;
+    else if (p < 75) return YELLOW;
+    else if (p < 100) return ORANGE;
+    else
+    return RED;
+  };
 
 
 // Cita od ThingSpeak - prakja podatoci vo queue - prakja notifikacija kon displejot dokolku ima nova informacija procitano od TS
 void ThingSpeakTask(void *param) {
   (void) param;
   pms_data snap;
-  while (true) {
-    if (WiFi.status() == WL_CONNECTED) {
-      snap.temp  = ThingSpeak.readIntField(ChannelID, 3, ReadKey);
-      snap.humid = ThingSpeak.readIntField(ChannelID, 4, ReadKey);
-      snap.pm2_5  = ThingSpeak.readIntField(ChannelID, 1, ReadKey);
-      snap.pm10  = ThingSpeak.readIntField(ChannelID, 2, ReadKey);
-      snap.stamp = millis();
+  WiFi.mode(WIFI_STA);
+  Serial.printf("Connecting ..");
+  WiFi.begin(ssid,pass);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 45000) {
+    Serial.print(".");
+    vTaskDelay(pdMS_TO_TICKS(500));
+  }
+  Serial.println(WiFi.status() == WL_CONNECTED ? "\nConnected" : "\nFailed to connect");
+  ThingSpeak.begin(client);
+  for(;;) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi lost, reconnecting...");
+      WiFi.reconnect();
+      vTaskDelay(pdMS_TO_TICKS(2000));
+      continue;
+    }
+    snap.temp  = ThingSpeak.readIntField(ChannelID, 3, ReadKey);
+    snap.humid = ThingSpeak.readIntField(ChannelID, 4, ReadKey);
+    snap.pm2_5 = ThingSpeak.readIntField(ChannelID, 1, ReadKey);
+    snap.pm10  = ThingSpeak.readIntField(ChannelID, 2, ReadKey);
+    snap.stamp = millis();
 
-      long status = ThingSpeak.getLastReadStatus();
-      if (status == 200) {
-        Serial.printf("TS read ok: T=%d H=%d PM2.5=%d PM10=%d\n", snap.temp, snap.humid, snap.pm2_5, snap.pm10);
-        // prati na queue
-        if (xQueueSend(tsQueue, &snap, pdMS_TO_TICKS(200)) != pdTRUE) { //prati na queue - ke ima status pdTRUE - dokolku queue e poln - printaj poraka
-          Serial.println("TS queue full");
-        } else {
-          if (displayTaskHandle) xTaskNotifyGive(displayTaskHandle); // koga ke dobieme novi podatoci od TS osven sto prakjame na queue - prakjame i notifikacija kon displejot za instantna notifikacija
-        }
-      } else {
-        Serial.printf("ThingSpeak error %ld\n", status);
+    long status = ThingSpeak.getLastReadStatus();
+    if (status == 200) {
+      Serial.printf("TS OK: T=%d H=%d PM2.5=%d PM10=%d\n", 
+        snap.temp, snap.humid, snap.pm2_5, snap.pm10);
+      if (xQueueSend(tsQueue, &snap, 0) == pdTRUE) {
+        xTaskNotifyGive(displayTaskHandle);
       }
     } else {
-      Serial.println("WiFi not connected");
+      Serial.printf("ThingSpeak error %ld\n", status);
     }
 
     vTaskDelay(pdMS_TO_TICKS(TS_READ));
   }
 }
 
-// === Display task ===
-// takes pms_data from queue and scrolls composed message across the matrix.
-// uses xTaskNotify to get immediate refresh on new data (and continues scrolling otherwise)
+
 void DisplayTask(void *param) {
   (void) param;
-  // text buffer and measurements
-  String bigText = "";
-  int textPixelWidth = 0;
-  int offset = 0;
+
   pms_data latest = {0,0,0,0,0};
+  pms_data new_data;
+  bool nw = false;
+  bool fd = false;
 
   // initialize display
   matrix.begin();
   matrix.setTextWrap(false);
-  matrix.setBrightness(40);   // adjust brightness for tests
+  matrix.setBrightness(20);   
   matrix.setFont();           // default font (6x8)
-  matrix.setTextColor(WHITE);
-
-  // Od poslednite poraki primeni od TS - printaj na displej
-  auto buildMessage = [&](const pms_data &s) {
-    String m = "AirQ ";
-    m += "T:" + String(s.temp) + "C ";
-    m += "H:" + String(s.humid) + "% ";
-    m += "P2:" + String(s.pm2_5) + " ";
-    m += "P10:" + String(s.pm10) + " ";
-    return m;
-  };
-
-  auto pixelWidth = [&](const String &s) -> int {
-    // default Adafruit 5x7 font uses 6 px per char (5 px + 1 spacing)
-    return s.length() * 6;
-  };
-
-  matrix.fillScreen(0);
-  matrix.setCursor(0,0);
-  matrix.print("KHIE @ FEIT");
-  matrix.show();
-  vTaskDelay(pdMS_TO_TICKS(800));
-
-  // za da nemame prazna poraka na displejot - dokolku ima informacija - napravi nova poraka, dokolku nema nova informacija od queue - prati default poraka
-  if (xQueueReceive(tsQueue, &latest, pdMS_TO_TICKS(1000)) == pdTRUE) {
-    bigText = buildMessage(latest);
-    textPixelWidth = pixelWidth(bigText);
-  } else {
-    latest = {0,0,0,0,0};
-    bigText = buildMessage(latest);
-    textPixelWidth = pixelWidth(bigText);
-  }
-
-  // offset starts at screen width so text enters from right
-  offset = -MATRIX_W;
+  int offset = MATRIX_W;
 
   for (;;) {
-    // if there is a new queue snap available immediately, get it
-    pms_data newdata;
-    if (xQueueReceive(tsQueue, &newdata, 0) == pdTRUE) {
-      // update latest, rebuild message
-      if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        latest = newdata;
-        xSemaphoreGive(dataMutex);
-      }
-      bigText = buildMessage(latest);
-      textPixelWidth = pixelWidth(bigText);
-      // resetiraj offset - da se pokaze nov aporaka od ddesno
-      offset = -MATRIX_W;
-    } else {
-      // da se probudi i so notifikacija
-      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(SCROLL_DELAY_MS));
-      // Dokolku ima dobieno notifikacija - probaj da go ispraznis queue
-      if (uxQueueMessagesWaiting(tsQueue) > 0) {
-        while (xQueueReceive(tsQueue, &newdata, 0) == pdTRUE) {
-          if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            latest = newdata;
-            xSemaphoreGive(dataMutex);
-          }
-          bigText = buildMessage(latest);
-          textPixelWidth = pixelWidth(bigText);
-          offset = -MATRIX_W;
-        }
-      }
-    }
-
-    // --- render the current window of bigText at horizontal position (MATRIX_W - offset) ---
     matrix.fillScreen(0);
-
-    // draw text at (x,y) where x = MATRIX_W - offset (so offset increments move left)
-    int x = MATRIX_W - offset;
-    matrix.setCursor(x, 0);
-
-    if (latest.temp < 10) matrix.setTextColor(BLUE);
-    else if (latest.temp < 20) matrix.setTextColor(YELLOW);
-    else if (latest.temp < 30) matrix.setTextColor(ORANGE);
-    else matrix.setTextColor(RED);
-    if (latest.humid < 30) matrix.setTextColor(LIME);
-    else if (latest.humid < 60) matrix.setTextColor(YELLOW);
-    else matrix.setTextColor(ORANGE);
-
-    if (latest.pm2_5 < 35) matrix.setTextColor(GREEN);
-    else if (latest.pm2_5 < 53) matrix.setTextColor(YELLOW);
-    else if (latest.pm2_5 < 70) matrix.setTextColor(ORANGE);
-    else matrix.setTextColor(RED);
-
-    if (latest.pm10 < 50) matrix.setTextColor(GREEN);
-    else if (latest.pm10 < 75) matrix.setTextColor(YELLOW);
-    else if (latest.pm10 < 100) matrix.setTextColor(ORANGE);
-    else matrix.setTextColor(RED);
-
-
-    matrix.print(bigText);
-    matrix.show();
-
-    // increment offset (scroll step)
-    offset++;
-    //Koga offsetot e pogolem od textPixelWifth i sirinata na matricata - vrati se desno (loop)
-    if (offset > textPixelWidth + MATRIX_W) {
-      offset = -MATRIX_W; 
+    if(WiFi.status() != WL_CONNECTED) {
+      matrix.setTextColor(WHITE);
+      matrix.setCursor(offset,0);
+      matrix.print("Connecting.. ");
+      matrix.show();
+      offset--;
+      if (offset < -120) offset = MATRIX_W;
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
     }
 
-  }
-}
+    if (!fd) {
+      if (xQueueReceive(tsQueue, &new_data, 0) == pdTRUE) {
+        fd = true;
+        latest = new_data;
+      } else {
+        matrix.setTextColor(WHITE);
+        matrix.setCursor(offset, 0);
+        matrix.print("  ");
+        matrix.show();
+        offset--;
+        if (offset < -20) offset = MATRIX_W;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        continue;
+      }
+    } else {
+      // Normal data update case
+      if (xQueueReceive(tsQueue, &new_data, 0) == pdTRUE) {
+        nw = true;
+      }
+    } 
 
-// Za da ima nesto prikazano na displejot - pocni od generalno - se 0 da prikazuva
-void postInitialQueue() {
-  pms_data init = {0,0,0,0, millis()};
-  xQueueSend(tsQueue, &init, 0);
+    String msg = "KHIE@FEIT Vozduh ";
+    msg += "T:" + String(latest.temp) + "C ";
+    msg += "H:" + String(latest.humid) + "% ";
+    msg += "PM2.5:" + String(latest.pm2_5) + " ";
+    msg += "PM10:" + String(latest.pm10) + "    ";
+    int msg_w  = msg.length() *6;
+
+    matrix.setCursor(offset,0);
+
+    matrix.setTextColor(WHITE);
+    matrix.print("KHIE @ FEIT Vozduh: ");
+    
+    matrix.setTextColor(color_temp(latest.temp));
+    matrix.print("T:");
+    matrix.print(latest.temp);
+    matrix.print("C ");
+
+    matrix.setTextColor(color_humid(latest.humid));
+    matrix.print("H:");
+    matrix.print(latest.humid);
+    matrix.print("% ");
+
+    matrix.setTextColor(color_PM2_5(latest.pm2_5));
+    matrix.print("PM2.5:");
+    matrix.print(latest.pm2_5);
+    matrix.print(" ");
+
+    matrix.setTextColor(color_PM10(latest.pm10));
+    matrix.print("PM10:");
+    matrix.print(latest.pm10);
+    matrix.print(" ");
+
+    matrix.show();
+    offset--;
+    
+    vTaskDelay(pdMS_TO_TICKS(SCROLL_DELAY_MS));
+    if (offset < -msg_w) {
+      offset = MATRIX_W;
+      if (nw) {
+        if(xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+          latest = new_data;
+          xSemaphoreGive(dataMutex);
+        }
+        nw = false;
+      }
+    }
+    
+  }
 }
 
 // === setup ===
@@ -246,13 +235,6 @@ void setup() {
     for (;;);
   }
 
-  WiFi.mode(WIFI_STA);
-  ThingSpeak.begin(client);
-
-  postInitialQueue();
-
-  // create tasks
-  xTaskCreatePinnedToCore(WiFiTask, "WiFiTask", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(ThingSpeakTask, "ThingSpeak", 8192, NULL, 2, NULL, 1);
   xTaskCreatePinnedToCore(DisplayTask, "Display", 8192, NULL, 2, &displayTaskHandle, 1);
 
