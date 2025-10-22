@@ -34,8 +34,8 @@ unsigned long ChannelID = 3095045;
 const char *ReadKey = "JM9QEV7SW8RKWRQZ";
 
 
-SemaphoreHandle_t dataMutex = NULL;
-QueueHandle_t tsQueue = NULL;          
+SemaphoreHandle_t dataMutex = NULL; // nudi zastita na podatocite da ne bidat obraboteni nesakano od drug task
+QueueHandle_t tsQueue = NULL;   // za prakjanje podatoci zemeni od TS kon taskot za prikazuvanje na displej
 TaskHandle_t displayTaskHandle = NULL; // ke ni posluzi za notifikacii 
 
 typedef struct {
@@ -43,14 +43,13 @@ typedef struct {
   int humid;
   int pm2_5;
   int pm10;
-  unsigned long stamp;
 } pms_data;
 
 static const TickType_t SCROLL_DELAY_MS = 60; // zavisi od sirinata na displejot sto prikazuvame - za pomali displei podobro e pogolem delay - za poubavo da se vidi porakata
-static const TickType_t TS_READ = 30000; // interval za citanje od ThingSpeak = 30sa
+static const TickType_t TS_READ = 30000; // interval za citanje od ThingSpeak = 30s
 
 
-  uint16_t color_temp(int t) {
+  uint16_t color_temp(int t) { // funkcii za promena na bojata vo soodvetnost na vrednostite na T,H,PM2.5,PM10
     if (t<10) return BLUE;
     else if (t < 20) return YELLOW;
     else if (t < 30) return ORANGE;
@@ -104,13 +103,12 @@ void ThingSpeakTask(void *param) {
     snap.humid = ThingSpeak.readIntField(ChannelID, 4, ReadKey);
     snap.pm2_5 = ThingSpeak.readIntField(ChannelID, 1, ReadKey);
     snap.pm10  = ThingSpeak.readIntField(ChannelID, 2, ReadKey);
-    snap.stamp = millis();
 
     long status = ThingSpeak.getLastReadStatus();
     if (status == 200) {
       Serial.printf("TS OK: T=%d H=%d PM2.5=%d PM10=%d\n", 
         snap.temp, snap.humid, snap.pm2_5, snap.pm10);
-      if (xQueueSend(tsQueue, &snap, 0) == pdTRUE) {
+      if (xQueueSend(tsQueue, &snap, 0) == pdTRUE) { // ako e == pdTRUE - znaci deka uspesno se stavile podatocite vo Queue - dokolku ne e znaci deka Queue e full ili nekoj drug error
         xTaskNotifyGive(displayTaskHandle);
       }
     } else {
@@ -125,36 +123,38 @@ void ThingSpeakTask(void *param) {
 void DisplayTask(void *param) {
   (void) param;
 
-  pms_data latest = {0,0,0,0,0};
+  pms_data latest = {0,0,0,0};
   pms_data new_data;
-  bool nw = false;
-  bool fd = false;
+  bool nw = false; // flag za dali pristignala novi podatoci - true koga ke pristignat - stavame flag - ne pravime odma update za da ne se presece prethodnata poraka
+  bool fd = false; // pomosen flag - koga pocnuva displejot posle konektiranje (Connecting.. ke se trgne) i ke pocne da se pecati normalnata poraka za podatoci - no na pocetok 
+  // se slucuva da nema zemeno podatoic od ThingSpeaj pa prvata poraka ke bidat site parametri (T,H,PM2.5, PM10) prikazani kako 0 - so ova ke go izbegneme toa
 
   // initialize display
   matrix.begin();
   matrix.setTextWrap(false);
   matrix.setBrightness(20);   
-  matrix.setFont();           // default font (6x8)
-  int offset = MATRIX_W;
+  matrix.setFont();           // default font (6x8) - edna bukva e siroka 6 pikseli 
+  int offset = MATRIX_W; // pocnuvame od posledniot piksel (16,0) - vrti od desno kon levo
 
   for (;;) {
     matrix.fillScreen(0);
-    if(WiFi.status() != WL_CONNECTED) {
+    if(WiFi.status() != WL_CONNECTED) { // koga ne e konektiran na WiFi prikazi Connecting..
       matrix.setTextColor(WHITE);
       matrix.setCursor(offset,0);
       matrix.print("Connecting.. ");
       matrix.show();
-      offset--;
-      if (offset < -120) offset = MATRIX_W;
+      offset--; 
+      if (offset < -100) offset = MATRIX_W; // Connecting = 13 karakteri * 6 = 78 potreben offset - no staven pogolem
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
 
-    if (!fd) {
-      if (xQueueReceive(tsQueue, &new_data, 0) == pdTRUE) {
+    if (!fd) { // dokolku sme na pocetok - i nemame zemeno data uste od TS - proveri - ako nema printaj prazno (ova ke trae kratko - no koga ke zeme za brzo podatoci od TS - se printa
+    // default poraka
+      if (xQueueReceive(tsQueue, &new_data, 0) == pdTRUE) { // dokolku ima nesto stasano na Queue (od TS) - stavi fd = true - odi da printas normalna poraka za podatoci od TS
         fd = true;
         latest = new_data;
-      } else {
+      } else { // printaj prazni mesta (ne prikazuj nisto) - koga ke dojde prvata informacija od TS (sto treba da bide za brzo) - ke prodolzi so normalna operacija
         matrix.setTextColor(WHITE);
         matrix.setCursor(offset, 0);
         matrix.print("  ");
@@ -165,8 +165,10 @@ void DisplayTask(void *param) {
         continue;
       }
     } else {
-      // Normal data update case
-      if (xQueueReceive(tsQueue, &new_data, 0) == pdTRUE) {
+      // Normal data update 
+      if (xQueueReceive(tsQueue, &new_data, 0) == pdTRUE) { // koga fd ke e true - prodolzi so normalna poraka - no ne printaj odma - samo setiraj flag
+      // SO KORISTENJE NA NOTIFIKACIJA (TaskNotify) DISPLEJOT MOZE NAJBRZO VO ISTIOT MOMENT DA BIDE UPDATIRAN KOGA KE PRISTIGNE NOVA INFORMACIJA OD TS - no ne prikazuj naednas
+      // za da ne se presece naglo prethodnata poraka sto bila isprintana - koga taa ke zavrsi odma ke pocne da se printa poraka so novi informaciii
         nw = true;
       }
     } 
@@ -175,18 +177,18 @@ void DisplayTask(void *param) {
     msg += "T:" + String(latest.temp) + "C ";
     msg += "H:" + String(latest.humid) + "% ";
     msg += "PM2.5:" + String(latest.pm2_5) + " ";
-    msg += "PM10:" + String(latest.pm10) + "    ";
+    msg += "PM10:" + String(latest.pm10) + "    "; // presmetaj sirina na porakata + 4 prazni mesta za da ne se presece PM10 na kraj
     int msg_w  = msg.length() *6;
 
     matrix.setCursor(offset,0);
 
     matrix.setTextColor(WHITE);
-    matrix.print("KHIE @ FEIT Vozduh: ");
+    matrix.print("KHIE @ FEIT Vozduh: "); // vo belo startna poraka 
     
-    matrix.setTextColor(color_temp(latest.temp));
+    matrix.setTextColor(color_temp(latest.temp)); //menuvaj boja vo soodvetnost so vrednosta na parametrite i printaj na displej
     matrix.print("T:");
     matrix.print(latest.temp);
-    matrix.print("C ");
+    matrix.print("C "); // so matrix.print i pred matrix.show se do sega se smesutva samo vo buffer - koga ke se povika matrix.show ke bide isprintano na displej
 
     matrix.setTextColor(color_humid(latest.humid));
     matrix.print("H:");
@@ -206,10 +208,10 @@ void DisplayTask(void *param) {
     matrix.show();
     offset--;
     
-    vTaskDelay(pdMS_TO_TICKS(SCROLL_DELAY_MS));
-    if (offset < -msg_w) {
+    vTaskDelay(pdMS_TO_TICKS(SCROLL_DELAY_MS)); // za kontrola na brzinata na porakata
+    if (offset < -msg_w) { // koga celosnata poraka ke ja snema od ekran - vrati se da printas nova poraka
       offset = MATRIX_W;
-      if (nw) {
+      if (nw) { // koga ke zavrsi prethodnata poraka - i sme imale nov podatok od notifikacijata - new  e setiran na true - zemi data of semafor
         if(xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
           latest = new_data;
           xSemaphoreGive(dataMutex);
@@ -226,21 +228,23 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // create RTOS objects
+  // kreiraj mutex i queue
   dataMutex = xSemaphoreCreateMutex();
-  tsQueue = xQueueCreate(4, sizeof(pms_data)); // small queue (4 entries)
+  tsQueue = xQueueCreate(4, sizeof(pms_data)); 
 
   if (!dataMutex || !tsQueue) {
     Serial.println("Failed to create mutex/queue");
     for (;;);
   }
 
-  xTaskCreatePinnedToCore(ThingSpeakTask, "ThingSpeak", 8192, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(DisplayTask, "Display", 8192, NULL, 2, &displayTaskHandle, 1);
+  //kreiraj gi taskovie za displej i TS
 
-  Serial.println("Setup done, tasks started");
+  xTaskCreatePinnedToCore(ThingSpeakTask, "ThingSpeak", 8192, NULL, 1, NULL, 1); 
+  xTaskCreatePinnedToCore(DisplayTask, "Display", 8192, NULL, 1, &displayTaskHandle, 1);
+
+  Serial.println("Setup done");
 }
 
-void loop() {
+void loop() { // vo loop portMAX_DELAY - za loop voopsto da ne odzima vreme pri izvrsuvanje na kodot - se se izvrsuva vo taskovi
   vTaskDelay(portMAX_DELAY);
 }
