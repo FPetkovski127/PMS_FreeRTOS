@@ -441,17 +441,19 @@ void SerialCommandTask(void *pv) {
             Serial.println("Channel: " + channelID);
             Serial.println("Write Key: " + writeKey);
             Serial.println("Mode: " + String((fast_mode) ? "FAST":"NORMAL"));
-          } else if (input.startsWith("setkey ")) {
+          } else if (input.startsWith("setkey ")) { // dodadena funkcija vo task za Serial Monitor input - da mozam lesno da promenam WriteKey vo EEPROM dokolku ima potreba
+          // najdov greska predtoa - kade sto vo baferot ne se zacuvuval NULL terminator - pa ne bese zacuvan celosno Write Key vo EEPROM - pa ova za polesno da smenam - mesto da 
+          // cepkam WiFi settings i AP konekcija - no sega i toa e popraveno i WriteKey uste na pocetok ke bide zacuvan kako sto treba vo EEPROM
               String newKey = input.substring(7);
               if (newKey.length() == 16) {
                 writeKey = newKey;
                 saveEEPROM();
-                Serial.println("Write Key updated and saved!");
+                Serial.println("Write Key saved");
               }  else {
-                Serial.println("Error: Write Key must be 16 chars long!");
+                Serial.println("Error: WriteKey isn't logn enough");
               } 
           } else {
-            Serial.println("Commands: fast | normal | show");
+            Serial.println("Commands: fast | normal | show | setKey");
           }
           input = "";
         }
@@ -482,7 +484,7 @@ void setup() {
     Serial.println("Failed to create queue/mmutex");
     for(;;) vTaskDelay(portMAX_DELAY);
   }
-    // WiFiManager params (HTML snippets) - added before autoConnect
+    
   const char* channel_num_html = "<br/><label for='channelnum'>ThingSpeak Channel Number</label><input type='text' name='channelnum' maxlength='7'>";
   new (&channel_num_param) WiFiManagerParameter(channel_num_html);
   wm.addParameter(&channel_num_param);
