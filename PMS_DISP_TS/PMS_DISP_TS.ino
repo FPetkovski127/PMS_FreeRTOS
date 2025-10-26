@@ -21,9 +21,13 @@
 #define CHANNEL_NUM_OFFSET 4
 #define CHANNEL_WRITE_OFFSET 27
 #define CHANNEL_MODE_OFFSET 42
-#define TS_INTERVAL 20000UL //20 s interval
 
-#define FAST_SAMPLES 10
+// vreminja za kontrola na rezimi za rabota - fast i normal 
+#define FAST_W 60000UL // 1 minuta zimaj podatoci vo fast mode pred avg i TS
+#define NORMAL_POWERON 30000UL // 30 s warmup
+#define NORMAL_GETDATA 30000UL // 30 s za citanje podatoci
+#define NORMAL_IDLE 120000UL // 120 s idle 
+
 const char EEPROM_KEY[4] = {'F','E','I','T'}; 
 
 enum PMS_STATES { POWERON, GETDATA, POWEROFF, IDLE};
@@ -43,13 +47,13 @@ const char* OTA_PW = "FEIT2025";
 const char* OTA_UN = "PMS_OTA_Device"; //username za ESP32 konekcija so OTA 
 
 int fast_mode = 0; // 0 = normal, 1 = fast
+bool pms_active = false;
 int wait_cycles = 0, idle_cycles = 0;
 Adafruit_SSD1306 display(128,64,&Wire, -1);  // Wire interface -> SDA = pin 21 , SCL = pin 22 (default I2C pins)
 HardwareSerial pmsSerial(2);
 
 QueueHandle_t pmsQ = NULL;
 QueueHandle_t otaQ = NULL; // for ota progress
-TimerHandle_t Timer = NULL;
 SemaphoreHandle_t mutex_data = NULL;
 
 typedef struct {
@@ -59,8 +63,6 @@ typedef struct {
   int humid = 0;
 } pms_data;
 pms_data latestData = {0,0,0,0};
-pms_data fast_buf[FAST_SAMPLES];
-int fast_count = 0;
 volatile bool params_set = false;
 
 void EEPROMinit() {
@@ -208,77 +210,171 @@ void OTATask(void *pvParameters) {
 
 void pmsTask(void *parameter) {
   uint8_t pms_buffer[31];
-  const TickType_t loopDelay = pdMS_TO_TICKS(200);
-  int cyclesBeforeGet = 25; // loops to wait (10*200ms=2s)
-  int idleCycleLimit = 35; // (15*200 = 3s za idle) - na sekoi 5 sekundi citaj 
-  for(;;) {
-    switch (fsm_state) {
-      case POWERON:
-        Serial.println("FSM: POWERON");
-        digitalWrite(PMS_SET, HIGH);
-        wait_cycles = 0;
-        fsm_state = GETDATA;
-        break;
+  unsigned long fast_w = 0;
+  unsigned long normal_w = 0;
 
-      case GETDATA:
-        if (wait_cycles++ >= cyclesBeforeGet) {
-          Serial.println("FSM: GETDATA");
-          unsigned long t0 = millis();
-          bool found=false;
-          while ((millis()-t0) < 300) {
-            if (pmsSerial.find((char)0x42)) {
-               found = true; break; 
-               }
-            vTaskDelay(pdMS_TO_TICKS(10));
+  pms_data accum = {0,0,0,0};
+  int sample_cnt = 0;
+  unsigned long state_start = 0;
+  bool first = true; // za first entry
+
+  for(;;) {
+    if (fast_mode) {
+      fsm_state = GETDATA;
+      if (!pms_active) {
+        digitalWrite(PMS_SET, HIGH);
+        pms_active = true;
+        Serial.println("Turning PMS on");
+      }
+      
+      if (fast_w == 0) {
+        fast_w = millis();
+        accum = {0,0,0,0};
+        sample_cnt = 0;
+      }
+
+      if(pmsSerial.find((char)0x42)) {
+        size_t r = pmsSerial.readBytes(pms_buffer,31);
+        if (r == 31 && checkValue(pms_buffer,31)) {
+          pms_data d;
+          d.pm2_5 = transmitPM2_5(pms_buffer);
+          d.pm10  = transmitPM10(pms_buffer);
+          d.temp  = transmitTemp(pms_buffer);
+          d.humid = transmitHumid(pms_buffer);
+
+          accum.pm2_5 += d.pm2_5;
+          accum.pm10  += d.pm10;
+          accum.temp  += d.temp;
+          accum.humid += d.humid;
+          sample_cnt++;
+          if(xSemaphoreTake(mutex_data, pdMS_TO_TICKS(20)) == pdTRUE) {
+            latestData = d;
+            xSemaphoreGive(mutex_data);
           }
-          if (found) {
-            size_t r = pmsSerial.readBytes(pms_buffer,31);
+          xQueueSend(pmsQ,&d,0);
+          Serial.printf("Sample %d: %d %d %dC %d%%\n", sample_cnt, d.pm2_5, d.pm10, d.temp, d.humid);
+        }
+      }
+      if (millis() - fast_w >= FAST_W) {
+        if (sample_cnt > 0) {
+          pms_data avg;
+          avg.pm2_5 = accum.pm2_5 / sample_cnt;
+          avg.pm10  = accum.pm10  / sample_cnt;
+          avg.temp  = accum.temp  / sample_cnt;
+          avg.humid = accum.humid / sample_cnt;
+          sendThingSpeak(avg);
+          Serial.printf("Sent average of %d samples\n", sample_cnt);
+        } else {
+          Serial.println("No samples collected");
+        }
+        accum = {0,0,0,0};
+        sample_cnt = 0;
+        fast_w = millis();
+      }
+      vTaskDelay(pdMS_TO_TICKS(200)); // sekoi 200 ms probaj da citas od PMS
+    } else {
+      switch (fsm_state) {
+        case POWERON:
+          if (first) {
+            Serial.println("POWERON");
+            digitalWrite(PMS_SET, HIGH);
+            pms_active = true;
+            state_start = millis();
+            // prepare accumulators for this cycle
+            accum = {0,0,0,0};
+            sample_cnt = 0;
+            first = false;
+          }
+          if (millis() - state_start >= NORMAL_POWERON) {
+            fsm_state = GETDATA;
+            first = true; // 
+          }
+          break;
+
+        case GETDATA:
+         if (first) {
+            Serial.println("GETDATA");
+            normal_w = millis(); // start 30s sampling window
+            first = false;
+          }
+
+          // attempt to read frames as they arrive
+          if (pmsSerial.find((char)0x42)) {
+            size_t r = pmsSerial.readBytes(pms_buffer, 31);
             if (r == 31 && checkValue(pms_buffer,31)) {
               pms_data d;
               d.pm2_5 = transmitPM2_5(pms_buffer);
               d.pm10  = transmitPM10(pms_buffer);
               d.temp  = transmitTemp(pms_buffer);
               d.humid = transmitHumid(pms_buffer);
-              // protect latestData with mutex
-              if (xSemaphoreTake(mutex_data, pdMS_TO_TICKS(50)) == pdTRUE) {
+
+              accum.pm2_5 += d.pm2_5;
+              accum.pm10  += d.pm10;
+              accum.temp  += d.temp;
+              accum.humid += d.humid;
+              sample_cnt++;
+
+              // update latestData thread-safe
+              if (xSemaphoreTake(mutex_data, pdMS_TO_TICKS(20)) == pdTRUE) {
                 latestData = d;
                 xSemaphoreGive(mutex_data);
               }
-              xQueueSend(pmsQ, &d, pdMS_TO_TICKS(100));
-              Serial.printf("PMS read: %d %d %dC %d%%\n", d.pm2_5, d.pm10, d.temp, d.humid);
-              if (fast_mode) {
-                if (fast_count < FAST_SAMPLES) {
-                  fast_buf[fast_count++] = d;
-                  Serial.printf("Fastr mode: stored sample %d/%d\n", fast_count, FAST_SAMPLES);
-                }
-              }
-            } else {
-              Serial.println("PMS read invalid or incomplete");
+
+              xQueueSend(pmsQ, &d, 0);
+              Serial.printf("Sample %d: %d %d %dC %d%%\n", sample_cnt, d.pm2_5, d.pm10, d.temp, d.humid);
             }
-          } else {
-            Serial.println("PMS start not found (timeout)");
           }
-          wait_cycles = 0;
-          fsm_state = POWEROFF;
-        }
-        break;
 
-      case POWEROFF:
-        Serial.println("FSM: POWEROFF done");
-        digitalWrite(PMS_SET, LOW);
-        idle_cycles = 0;
-        fsm_state = IDLE;
-        break;
+          // after sampling window completes -> average & send
+          if (millis() - normal_w >= NORMAL_GETDATA) {
+            if (sample_cnt > 0) {
+              pms_data avg;
+              avg.pm2_5 = accum.pm2_5 / sample_cnt;
+              avg.pm10  = accum.pm10  / sample_cnt;
+              avg.temp  = accum.temp  / sample_cnt;
+              avg.humid = accum.humid / sample_cnt;
 
-      case IDLE:
-        if (idle_cycles++ >= idleCycleLimit) {
-          Serial.println("FSM: IDLE done");
-          fsm_state = POWERON;
-        }
-        break;
+              sendThingSpeak(avg);
+              Serial.printf("Sent average of %d samples\n", sample_cnt);
+            } else {
+              Serial.println("No samples collected in GETDATA");
+            }
+            fsm_state = POWEROFF;
+            first = true;
+          }
+          break;
+
+        case POWEROFF:
+          if (first) {
+            Serial.println("POWEROFF - turning sensor off");
+            digitalWrite(PMS_SET, LOW);
+            pms_active = false;
+            state_start = millis();
+            first = false;
+          }
+          // 3 s vo POWEROFF pred IDLE
+          if (millis() - state_start >= 3000UL) {
+            fsm_state = IDLE;
+            first = true;
+          }
+          break;
+
+        case IDLE:
+          if (first) {
+            Serial.println("IDLE (sleeping)");
+            state_start = millis();
+            first = false;
+          }
+          if (millis() - state_start >= NORMAL_IDLE) {
+            fsm_state = POWERON;
+            first = true;
+          }
+          break;
+      }
+      vTaskDelay(pdMS_TO_TICKS(150));
     }
-    vTaskDelay(loopDelay);
   }
+
 }
 
 void LEDTask(void *parameter) { // pin 2 -  built in dioda na esp32 kontrolirame intenzitet na trepkanje so mode
@@ -388,37 +484,6 @@ void sendThingSpeak(pms_data data) { // zapisi podatoci vo TS
   }
 }
 
-void TimerTS(TimerHandle_t Timer) { // vo timer funkcijata kontrolirame dali e vo fast mode - i dali da pravi averaging ili ne
-  if (fast_mode) {
-    if (fast_count >= FAST_SAMPLES) {
-      pms_data avg = {0,0,0,0};
-      for (int i = 0; i< fast_count; i++) {
-        avg.pm2_5 += fast_buf[i].pm2_5;
-        avg.pm10  += fast_buf[i].pm10;
-        avg.temp  += fast_buf[i].temp;
-        avg.humid += fast_buf[i].humid;
-      }
-      avg.pm2_5 /= fast_count;
-      avg.pm10  /= fast_count;
-      avg.temp  /= fast_count;
-      avg.humid /= fast_count;
-      Serial.println("Fast mode: send avg data to ThingSpeak");
-      sendThingSpeak(latestData);
-      fast_count = 0;
-    } else {
-      Serial.printf("Fast mode: waiting..");
-    }
-  } else {
-    pms_data snap;
-    if (xSemaphoreTake(mutex_data, pdMS_TO_TICKS(50)) == pdTRUE) { // dokolku ne e fast mode zemi posledna data od semafor - prati na TS
-      snap = latestData;
-      xSemaphoreGive(mutex_data);
-      sendThingSpeak(latestData);
-    } else {
-      Serial.println("ThingSpeak: cannot get mutex for latert data");
-  }  
-  }
-}
 
 void SerialCommandTask(void *pv) {
   (void) pv;
@@ -430,11 +495,11 @@ void SerialCommandTask(void *pv) {
         if (input.length() > 0) {
           input.trim();
           if (input.equalsIgnoreCase("fast")) {
-            fast_mode = 1; fast_count = 0;
+            fast_mode = 1; 
             saveEEPROM();
             Serial.println("FAST mode");
           } else if (input.equalsIgnoreCase("normal")) {
-            fast_mode = 0; fast_count = 0;
+            fast_mode = 0; 
             saveEEPROM();
             Serial.println("NORMAL mode");
           } else if (input.equalsIgnoreCase("show")) {
@@ -569,14 +634,6 @@ void setup() {
     1
   );
 
-  Timer = xTimerCreate("Timer",
-                      pdMS_TO_TICKS(20000), // 20 s
-                      pdTRUE,
-                      (void*)0,
-                      TimerTS);
-  if (Timer != NULL) {
-    xTimerStart(Timer,0);
-  }
   Serial.println("Setup done");
 }
 
