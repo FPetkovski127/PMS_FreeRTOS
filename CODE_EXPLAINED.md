@@ -1,12 +1,24 @@
-# I2 Air-Quality Project - code explained (for documentation and comments)
+# I2 Air-Quality Project - code explanation
 
-Folder: `FilipCode/7-07noemvri-Filip/`
+## Project overview
+
+A school air-quality system made of two ESP32 units that communicate through the ThingSpeak cloud:
+
+1. **Sensor unit** - measures PM2.5 / PM10 (PMS5003T sensor), temperature, humidity and (optionally) the A-weighted sound level (INMP441 microphone) and uploads the values to ThingSpeak.
+2. **Matrix display unit** - reads the latest values from ThingSpeak and shows them as scrolling coloured text on a NeoPixel matrix.
+
+The first generation ran as a classic *super-loop* (one big `loop()`). This version is built on **FreeRTOS**: every job is a separate task with its own priority, and the tasks exchange data through queues and mutexes. Benefits: the slow network operations cannot block the time-critical ones, timing can be measured per task, and new features (sound level meter) can be added without disturbing the existing flow.
+
+Other improvements in this version: settings stored safely in flash, a WiFi connection supervisor with automatic recovery, a protected configuration portal, a serial console, remote calibration through ThingSpeak, and built-in timing / CPU-load measurement tools.
+
+## Repository layout
 
 - `libraries/I2Common/` - shared library (settings, WiFi, console, timing tools)
 - `PMS_Sensor_RTOS/` - sensor unit (PMS5003T + INMP441 sound level meter + OLED)
 - `Matrix_Display_RTOS/` - matrix display unit
+- `CODE_EXPLAINED.md` - this document
 
-Diagrams are Mermaid (they render in the VS Code Markdown preview; export to PNG/SVG for Word).
+Diagrams are Mermaid (they render in the VS Code / GitHub Markdown preview; export to PNG/SVG for Word).
 
 ---
 
@@ -89,26 +101,26 @@ Design rule (rate-monotonic idea): the most time-critical work gets the highest 
 
 ---
 
-## 2. Your question: what is the "Access Code" and which "portal page"?
+## 2. Configuration portal and access code
 
-### 2.1 Which portal page
+### 2.1 The portal page
 
-This is the **WiFiManager configuration page** from your original code. It is a small web page that the ESP32 itself serves while it runs its own WiFi access point (AP).
+The portal is the **WiFiManager configuration page**. It is a small web page that the ESP32 itself serves while it runs its own WiFi access point (AP).
 
-How you get to it:
-1. The ESP32 starts an access point named **`AqsAP-WiFi`** (password `FEIT_KHIE_AP`).
-2. You connect your phone to that WiFi network.
-3. The phone opens the page automatically (captive portal), or you open `192.168.4.1` in a browser.
-4. The page shows a list of nearby networks, a password box, and the extra fields from the original code (ThingSpeak channel ID, write/read key, fast-mode checkbox).
+How to reach it:
+1. The ESP32 starts an access point named **`AqsAP-WiFi`** (password `FEIT_KHIE_AP`, configurable in `i2_secrets.h`).
+2. Connect a phone to that WiFi network.
+3. The phone opens the page automatically (captive portal), or open `192.168.4.1` in a browser.
+4. The page shows a list of nearby networks, a password box, and the extra fields (ThingSpeak channel ID, write/read key, fast-mode checkbox, access code).
 
-Now the ESP32 opens this AP only when it is needed:
+The ESP32 opens this AP only when it is needed:
 - **Automatically**: the unit has been without WiFi for more than 60 s (at most once per 15 minutes).
-- **On demand**: you type `portal` in the serial monitor (after `login`).
+- **On demand**: type `portal` in the serial monitor (after `login`).
 - It stays open for **3 minutes**, then closes by itself.
 
-### 2.2 What the Access Code is
+### 2.2 The access code
 
-The access code is the **"general password"** from your 28.10 comments ("so that not just anyone can get in and set parameters").
+The access code is a general password that decides who may change parameters.
 
 - It is the same code as the serial `login <code>` code. Factory default is `KHIE-2026` (in `i2_secrets.h`). It is stored in flash and changed with the serial command `passwd`.
 - It is an extra field at the top of the portal page: **"Access code (required)"**.
@@ -139,7 +151,7 @@ Protection layers (this answers the "someone connected to the AP and entered wro
 2. The AP is WPA2-protected and closes after 3 minutes.
 3. Nothing is stored without the correct access code.
 
-**To verify on hardware:** that your WiFiManager version calls the save-params callback when the main WiFi form is submitted (it did in your original code, which used the same callback). If it does not, the portal would join the WiFi but not save anything.
+**To verify on hardware:** that the installed WiFiManager version calls the save-params callback when the main WiFi form is submitted (the previous version of the project used the same callback). If it does not, the portal would join the WiFi but not save anything.
 
 ---
 
@@ -192,7 +204,7 @@ Plain `#define`s: default WiFi (`I2_DEFAULT_WIFI_*`), service/hotspot WiFi (`I2_
 | `i2CalParseCsv` | parses `version,g25,o25,g10,o10,gT,oT,gH,oH` and rejects insane values (gain 0.1..10, offset +-500) |
 | `i2CalApply(c, raw)` | `gain * raw + offset` |
 
-**Flash-write protection (item 4):**
+**Flash-write protection:**
 
 ```mermaid
 flowchart TD
@@ -279,7 +291,7 @@ Parts:
 - **Line reader `consoleTask`**: handles CR, LF and CRLF as one line end, backspace, 128-character limit, wizard timeout after 120 s.
 - **`i2consoleBegin(ext, help, statusHook, changedHook)`**: the sketch plugs in its own commands, extra lines for `status`, and a function called after settings change.
 
-### 3.6 `I2Perf.h/.cpp` - timing and load tools (needed for item 9)
+### 3.6 `I2Perf.h/.cpp` - timing and load tools (needed for real-time analysis)
 
 | Tool | How it works | What it answers |
 |---|---|---|
@@ -428,8 +440,8 @@ flowchart LR
 ```
 
 - `ts_read`: reads fields 1-5 in one HTTP request, rounds to integers, puts them in the queue. On failure retries after 10 s and restarts the unit if nothing worked for 30 minutes.
-- `display`: shows "Connecting.." while WiFi is down. When new data arrives while a message is scrolling, it waits until the message has scrolled out, then switches (your original idea). Text is drawn in coloured segments (colour by value); the message width is computed from the text actually drawn.
-- Colour thresholds: unchanged from your code; noise added (<55 green, <70 yellow, <85 orange, else red).
+- `display`: shows "Connecting.." while WiFi is down. When new data arrives while a message is scrolling, it waits until the message has scrolled out, then switches. Text is drawn in coloured segments (colour by value); the message width is computed from the text actually drawn.
+- Colour thresholds: unchanged from the previous version; noise added (<55 green, <70 yellow, <85 orange, else red).
 
 ---
 
@@ -439,7 +451,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-  participant T as Teacher (ThingSpeak web)
+  participant T as Administrator (ThingSpeak web)
   participant CH as Calibration channel
   participant U as Sensor unit
   participant O as Operator (serial)
@@ -469,17 +481,196 @@ sequenceDiagram
 |---|---|---|
 | `I2Settings` | yes | no stored parameters |
 | `I2Wifi` (supervisor + OTA) | yes | no connection management |
-| config portal inside `I2Wifi` | optional (your choice) | serial setup + service network still work |
+| config portal inside `I2Wifi` | optional (deployment choice) | serial setup + service network still work |
 | service (hotspot) network | optional | one `if` block in `wifiTask` |
 | `I2Console` | optional but recommended | no serial setup, no `perf` |
-| `I2Perf` | needed for item 9 | no measurements (also remove probe calls) |
+| `I2Perf` | needed for timing analysis | no measurements (also remove probe calls) |
 | `sound_level.*`, `sos-iir-filter.h` | optional (`ENABLE_SLM 0`) | PMS only |
 | `task_display.cpp` | temporary | final product uses the matrix |
 | 555 hook / `hw_wdt` | only if the 555 is wired | leave `PIN_HW_WDT_KICK -1` |
 
 ## 8. To verify on real hardware
 
-1. PMS5003T frame offsets (temperature / humidity / PM type) against the old `PMS5003T.h`.
+1. PMS5003T frame offsets (temperature / humidity / PM type) against the original `PMS5003T.h` / datasheet.
 2. WiFiManager save callback saves the portal values (section 2).
-3. Build with your installed library versions (ThingSpeak, arduinoFFT, Adafruit libraries, WiFiManager).
-4. `perf` numbers on the NodeMCU (2 cores) and with `TEST_SINGLE_CORE 1` (S2-like).
+3. Build with the installed library versions (ThingSpeak, arduinoFFT, Adafruit libraries, WiFiManager).
+4. `perf` numbers on the ESP32 (2 cores) and with `TEST_SINGLE_CORE 1` (S2-like).
+
+A step-by-step procedure for all of this is in section 9.
+
+---
+
+## 9. Bench testing guide
+
+A complete test of every feature is possible with the minimum bench set-up below. No school hardware is needed.
+
+### 9.1 Bench set-up
+
+| Item | Connection |
+|---|---|
+| ESP32 dev board (sensor unit) | USB to PC, Serial Monitor **115200 baud**, line ending **Newline** (or *Both NL & CR*) |
+| PMS5003T | PMS TX -> GPIO16, PMS RX -> GPIO17, SET -> GPIO4, 5 V + GND |
+| OLED SSD1306 (I2C) | SDA GPIO21, SCL GPIO22, 3.3 V, address 0x3C |
+| INMP441 (optional) | VDD 3.3 V, GND, SCK -> GPIO32, WS -> GPIO5, SD -> GPIO33, **L/R -> GND** |
+| Second ESP32 (matrix unit) | DIN -> GPIO5 (of that board), matrix powered from a suitable 5 V supply |
+| Phone | used as the service hotspot, for the config portal and for a reference sound-level app |
+| ThingSpeak | one data channel (fields 1-6); optionally a second channel for calibration |
+
+Preparation:
+1. Install the libraries: ThingSpeak, WiFiManager, Adafruit SSD1306, Adafruit GFX, Adafruit NeoMatrix, Adafruit NeoPixel, arduinoFFT.
+2. Copy `libraries/I2Common` into `Documents/Arduino/libraries`.
+3. Edit `libraries/I2Common/src/i2_secrets.h` (WiFi, service hotspot, OTA password, access code) and the ThingSpeak channel/keys in the two `app_config.h` files.
+4. Board: *ESP32 Dev Module*, default partition scheme (OTA needs two app partitions).
+5. For the first tests use the shortest cycle: after boot type `login <code>` and `set sleep 30`.
+
+Useful commands during all tests: `help`, `status`, `show`, `perf`.
+
+### 9.2 Test list
+
+| # | Test | Steps | Expected result |
+|---|---|---|---|
+| 1 | Boot | Flash the sensor sketch, open the monitor | `[cfg] no valid settings ... factory defaults` (first boot only), `[perf] idle baseline ...`, `[wifi] connected ...`, `Setup done`. `status` shows firmware, uptime, reset reason, WiFi, FSM |
+| 2 | Console lock | `set channel 3095045` | `Locked. Use: login <code>` |
+| 3 | Login + validation | `login <code>`, then `set channel 12345` (5 digits), `set channel 123456` (6 digits), `set wkey ABC` | 5 digits rejected, 6 digits accepted, short key rejected |
+| 4 | Setup wizard | `setup`, press ENTER on every question, `y` at the end | Current value shown for every parameter, nothing changes, unit restarts |
+| 5 | Persistence | change a value with `set`, press the board RESET button, then `show` | Value is still there; `status` says *settings from flash: yes* |
+| 6 | Wrong code lock | `login wrong` three times | 30 s lockout message |
+| 7 | FSM timing | watch the log with timestamps enabled | `WARMUP (30 s)` -> `MEASURE (30 s)` with one `sample` line per second -> `average of N samples` -> `SLEEP (240 s)` -> `WARMUP` |
+| 8 | Sensor reaction | during MEASURE blow smoke / incense / breath at the PMS | PM values rise, OLED follows; humidity rises with breath |
+| 9 | Fast mode | `fast` while in SLEEP | SLEEP ends immediately, WARMUP starts, afterwards MEASURE repeats every 60 s without sleep; LED blinks faster (250 ms) |
+| 10 | Back to normal | `normal` | after the current window the unit goes to SLEEP again; LED 500 ms |
+| 11 | ThingSpeak upload | wait for one average | `[ts] upload OK`; values appear in fields 1-4 (5-6 with the microphone) |
+| 12 | Upload failure | `set wkey AAAAAAAAAAAAAAAA` (valid format, wrong key) | `upload failed, HTTP ...`, three tries 20 s apart, then `giving up`; `perf` counter `ts_upload_failed` increases. Restore the real key |
+| 13 | Sensor unplugged | disconnect the PMS TX wire | `no valid frames in this window`; counter `pms_empty_windows` |
+| 14 | WiFi loss | switch the router off | `link lost`, repeated connect attempts; when the router returns the unit reconnects by itself |
+| 15 | Service network | create a phone hotspot with the service SSID/password, then switch the router off | unit joins the hotspot; `status` shows *(SERVICE net)* |
+| 16 | Config portal | with neither network available wait > 60 s (or type `portal`) | AP `AqsAP-WiFi` appears; connect with the phone, open `192.168.4.1` |
+| 17 | Portal access code | submit the form once with a wrong and once with the right access code | wrong: `WRONG access code - nothing saved`; right: `settings saved` and the unit uses the new WiFi |
+| 18 | Long outage | keep all networks off for > 10 min | `down too long - restarting ESP32`; the unit boots and keeps trying |
+| 19 | OTA | with the unit on the network choose the network port in Arduino IDE and upload | OLED shows the OTA progress bar, unit reboots with the new firmware. Wrong OTA password is refused |
+| 20 | Remote calibration | see 9.3 | pending message, accept, values change |
+| 21 | Matrix unit | see 9.4 | scrolling text with coloured values |
+| 22 | Sound level | see 9.5 | LAeq follows the room noise |
+| 23 | Performance | see 9.6 | table of timings, CPU load, stack and heap |
+
+### 9.3 Remote calibration test
+
+1. Create a second ThingSpeak channel (it may be private) and note its channel ID, read key and write key.
+2. On the unit: `login <code>`, `set cfgch <channel id>`, `set cfgkey <read key>` (use `-` for a public channel).
+3. Write a calibration set from any browser (format `version,g25,o25,g10,o10,gT,oT,gH,oH`):
+   `https://api.thingspeak.com/update?api_key=<WRITE_KEY>&field1=2,1.10,0,1.00,0,1,-1.5,1,3`
+4. Type `cal fetch`. Expected: `NEW calibration version 2 available`.
+5. `cal` shows the active and the pending values. `cal accept` stores them (login required). From the next sample PM2.5 is 10 % higher, temperature 1.5 lower, humidity 3 higher.
+6. `cal reject` (with a new version 3) refuses it; it is not offered again until version 4.
+7. `cal auto on`, write version 4: it is applied without asking.
+8. Write an older version (1) or a broken string (`gain 50`): ignored with a message.
+
+### 9.4 Matrix unit test
+
+1. Flash `Matrix_Display_RTOS` to the second ESP32 and set the same channel and a read key with `login`, `set channel`, `set rkey`.
+2. Expected: `Connecting..` while WiFi is down, then the scrolling message `KHIE @ FEIT Vozduh: T:..C H:..% PM2.5:.. PM10:..`.
+3. To test colours without waiting for the sensor, write values by URL (`...update?api_key=<WRITE_KEY>&field1=80&field2=120&field3=35&field4=70&field5=90`): PM2.5/PM10 red, temperature red, humidity orange, noise red.
+4. New data arriving while a message scrolls is shown only after the message ends.
+5. Recovery: switch the router off for a few minutes and back on - the text must return without a manual reset. After 10 minutes without WiFi the unit restarts itself.
+6. `perf` shows `matrix_frame` (frame time against the 60 ms scroll period) and `ts_read_http`.
+
+### 9.5 Sound level meter test
+
+1. Wire the INMP441 (section 9.1). `slm` must show `running` and a changing LAeq.
+2. Typical indoor values: quiet room about 30-45 dBA, normal speech 55-65 dBA, a clap above 80 dBA.
+3. Compare with a sound-level app on a phone for a rough check (phone microphones are not accurate).
+4. Proper calibration needs a 94 dB / 1 kHz acoustic calibrator: put it on the microphone and type `slm ref 94` (login required). The correction is stored in flash (`set slmoff` sets it directly).
+5. `slm fft` prints one spectrum in START/END format; the `inmp441.py` script can plot it (the bin width is 48000/512 = 93.75 Hz).
+6. `slm off` / `slm on` stop and start the microphone processing; the PM cycle must continue unaffected.
+
+### 9.6 Performance and real-time test
+
+Procedure (repeat for each configuration and write the numbers into a table):
+1. `perf reset`, then `perf cpu on`, wait 60 s, then `perf`.
+2. Read: CPU load per core (now / average / **peak**), the probe table (`slm_block`, `slm_calc`, `pms_loop_body`, `pms_wake_late`, `oled_frame`, `ts_http`), the stack column and the heap line.
+
+Configurations to compare:
+
+| Config | How |
+|---|---|
+| A: PMS only | `ENABLE_SLM 0` |
+| B: PMS + SLM, 2 cores | defaults |
+| C: PMS + SLM on one core (S2-like) | `TEST_SINGLE_CORE 1` |
+
+Overload experiment (generator = `perf load <pct> <prio> <core> <seconds>`):
+- Raise the load step by step: 30, 50, 70, 90 % at priority 1, then at priority 5, on the core that runs the SLM.
+- After each step read `perf`.
+
+How to interpret:
+
+| Observation | Meaning |
+|---|---|
+| `slm_block` max below its budget (125000 us) | the filter chain finishes within one block period |
+| `slm_block` overruns > 0 | **deadline missed**; the I2S input can overflow |
+| `slm_block_dropped` > 0 | the calc task cannot keep up, data lost |
+| `pms_wake_late` max grows | scheduling jitter of the state machine under load |
+| stack free < 300 bytes | stack overflow danger: enlarge the stack in `i2CreateTask` |
+| heap minimum very low | memory problem |
+| WiFi drops during very high load | the high-priority load task starves the network task |
+
+Possible measures if the limit is reached: lower the priority of non-critical tasks, put the SLM on its own core, process in time slices, reduce work per block (fewer filter sections, fixed point), lower the CPU load of the FFT by running it only on demand.
+
+### 9.7 Before deploying a unit in a school
+
+- `normal` mode (fast mode is stored in flash and survives a reset!) and sleep 240 s (`show`).
+- Access code, OTA password and AP password changed from the factory values.
+- `status`: WiFi connected, ThingSpeak upload OK, no pending calibration, `reset reason` = power-on.
+- `ENABLE_SLM 0` if the unit has no microphone; `ENABLE_OLED 0` if it has no OLED.
+- Real `i2_secrets.h` kept out of version control.
+
+### 9.8 Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| `no valid frames` | TX/RX crossed, SET pin, 5 V supply of the PMS, baud 9600 |
+| PM values look wrong | frame offsets / atmospheric vs CF=1 (`PMS_USE_ATMOSPHERIC`) |
+| OLED stays black | address (0x3C / 0x3D), wiring, `oled init failed` message |
+| No network port for OTA | unit and PC on the same network, firewall, OTA password |
+| `i2s` errors or LAeq constant | microphone wiring, L/R pin to GND, pin numbers in `app_config.h` |
+| Console ignores input | line ending must be Newline or Both NL & CR |
+| Portal does not save | WiFiManager version / save callback (section 2) |
+
+---
+
+## 10. Frequently asked questions
+
+**Why FreeRTOS instead of a super-loop?**
+In a super-loop every action waits for the previous one: a slow HTTP request delays the sensor reading and the display. With tasks each job has its own period and priority; the scheduler interrupts a low-priority job when a high-priority one is ready. Timing becomes measurable (section 3.6) and the system degrades in a controlled way.
+
+**Why are settings in flash (NVS) and not EEPROM?**
+NVS is wear-levelled and checks every entry. In addition the whole settings block is stored twice with a CRC, verified after writing, and skipped when unchanged (section 3.3).
+
+**What protects against a reset during a flash write?**
+The write is staged (slot A, then slot B), both are verified, and boot falls back to a valid slot or the factory defaults. The external 555 watchdog is kicked right before each write so that it cannot fire in the middle of it. The firmware reports the last reset reason (`status`), which shows whether a restart came from the watchdog, a crash or a brownout.
+
+**Why is there both a config portal and a serial console?**
+The portal allows changing the WiFi on site with a phone, without a cable. The serial console is for installation, diagnostics and testing. Both are protected by the same access code.
+
+**Is the AP a security risk?**
+It is closed in normal operation, opens only when the link is lost (or on command), is WPA2-protected, closes after 3 minutes, and nothing is saved without the access code.
+
+**What is the service network for?**
+A fallback WiFi (a phone hotspot) with a factory name and password, so that firmware can always be updated over the air even when the school network is unavailable.
+
+**Why does the state machine sleep and what is fast mode?**
+Normal mode is 30 s warm-up, 30 s measuring, 240 s sleep with the sensor fan off: longer sensor life and a 5-minute upload period. Fast mode skips the sleep (sensor stays on) and uploads every 60 s; it is meant for testing and demonstrations, production runs in normal mode.
+
+**Why is calibration stored on ThingSpeak and not in the firmware?**
+Replacing a sensor must not require a new firmware. The coefficients are in a flash-stored set (gain and offset per quantity) that can be updated remotely through a calibration channel and is applied only after confirmation (or automatically if enabled).
+
+**Why `10*log10` of the mean square and not `20*log10` of the RMS?**
+They give the same number. Power is proportional to the square of the amplitude, so `20*log10(RMS) = 10*log10(RMS^2)`. The mean-square form needs one square root less.
+
+**Why are sound levels averaged as energy?**
+Decibels are logarithmic: averaging dB values underestimates the true level. The code converts to energy (`10^(L/10)`), averages, and converts back.
+
+**Can the ESP32-S2 mini run the sound level meter?**
+It has one core and no floating-point unit, so the filter chain runs in software and takes much more time. Use the timing tools (configuration C in section 9.6) to measure whether it fits into the 125 ms block budget together with the rest of the system.
+
+**Which tools exist in FreeRTOS to watch the load?**
+Stack high-water mark per task, run-time statistics (needs a special build option) and the idle-hook method used here, plus hardware tools such as SEGGER SystemView / Percepio Tracealyzer and a GPIO toggled around the critical code and watched on a logic analyser or oscilloscope.
