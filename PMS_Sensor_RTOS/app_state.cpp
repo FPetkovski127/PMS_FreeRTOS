@@ -57,13 +57,3 @@ const char* pmsStateName(PmsState s) {
   }
   return "?";
 }
-
-// Pulses the external 555 watchdog input. Also called right before every flash
-// write (settings) so the 555 cannot time out in the middle of a write.
-void hwWdtKick() {
-#if PIN_HW_WDT_KICK >= 0
-  digitalWrite(PIN_HW_WDT_KICK, HW_WDT_ACTIVE_LEVEL);
-  vTaskDelay(pdMS_TO_TICKS(HW_WDT_PULSE_MS));
-  digitalWrite(PIN_HW_WDT_KICK, !HW_WDT_ACTIVE_LEVEL);
-#endif
-}

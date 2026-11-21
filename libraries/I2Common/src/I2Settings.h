@@ -12,8 +12,6 @@
 //     slot wins; a damaged slot is repaired from the good one.
 //   * Every write is read back and verified.
 //   * Nothing is written when the values did not change (flash wear).
-//   * Optional hook is called before each flash write so the external 555
-//     watchdog can be kicked and cannot fire in the middle of a write.
 // ============================================================================
 #include <Arduino.h>
 
@@ -74,7 +72,6 @@ struct I2Defaults {
 void  i2cfgBegin(const I2Defaults& d);
 const I2Defaults& i2cfgDefaults();
 bool  i2cfgLoadedFromNvs();
-void  i2cfgSetPreWriteHook(void (*fn)());   // e.g. hardware watchdog kick
 
 // --- access (thread safe) ---------------------------------------------------
 void     i2cfgSnapshot(I2Settings& out);

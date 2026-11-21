@@ -16,7 +16,7 @@ struct TsMsg {                                              // FSM -> ThingSpeak
 // ----------------------------------------------------- shared state ---------
 extern volatile PmsState g_pmsState;
 extern volatile uint32_t g_stateStartMs, g_stateDurMs;      // for the "time left" on the display
-extern volatile uint32_t g_pmsHeartbeat;                    // incremented every FSM loop (watchdog)
+extern volatile uint32_t g_pmsHeartbeat;                    // incremented every FSM loop (shown by 'status')
 extern TaskHandle_t      g_pmsTask;
 extern QueueHandle_t     g_tsQ;
 extern volatile int      g_tsLastStatus;                    // last HTTP status (0 = nothing sent yet)
@@ -26,7 +26,6 @@ void        appStateInit();
 void        appLatestSet(const PmsSample& s);
 PmsSample   appLatestGet();
 const char* pmsStateName(PmsState s);
-void        hwWdtKick();                                    // pulse the external 555 watchdog
 
 // ----------------------------------------------------- perf probes ----------
 extern PerfProbe   pr_pmsPeriod;     // FSM wake-up lateness (scheduling jitter)
@@ -47,5 +46,4 @@ void pmsTask(void*);
 void tsTask(void*);
 void displayTask(void*);
 void ledTask(void*);
-void hwWdtTask(void*);
 void sensorConsoleInit();           // registers 'perf', 'slm', 'cal' commands

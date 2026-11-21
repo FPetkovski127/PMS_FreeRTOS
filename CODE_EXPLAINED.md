@@ -33,8 +33,6 @@ flowchart LR
     MIC["INMP441 mic"] -- "I2S 48 kHz" --> ESP1
     ESP1 -- "I2C" --> OLED["OLED (temporary)"]
     ESP1 -- "SET pin (fan on/off)" --> PMS
-    WD["555 hardware watchdog"] -. "reset (EN pin)" .-> ESP1
-    ESP1 -. "kick pulse" .-> WD
   end
   ESP1 -- "WiFi / HTTP write" --> TS[("ThingSpeak<br/>data channel")]
   CAL[("ThingSpeak<br/>calibration channel")] -- "HTTP read, hourly" --> ESP1
@@ -74,8 +72,7 @@ Higher priority number = more urgent. Task stack sizes are in bytes.
 | Task | Unit | Priority | Core (ESP32) | Period / trigger | Job |
 |---|---|---|---|---|---|
 | `slm_reader` | sensor | 4 | 1 | every 125 ms (I2S block) | read mic block, filter, produce 2 sums |
-| `pms_fsm` | sensor | 3 | 0 | 50 ms | state machine + UART parsing |
-| `hw_wdt` | sensor | 3 | 0 | 1 s | kick 555 while FSM is alive (only if pin set) |
+| `pms_fsm` | sensor | 3 | 0 | 50 ms | state machine + UART parsing; feeds the internal task watchdog |
 | `thingspeak` | sensor | 2 | 0 | queue / 1 s poll | upload, retries, calibration check |
 | `slm_calc` | sensor | 2 | 1 | per block | dB, Leq, FFT |
 | `wifiTask` | both | 2 | 0 | 100 ms | connection supervisor, OTA, portal |
@@ -166,6 +163,7 @@ Plain `#define`s: default WiFi (`I2_DEFAULT_WIFI_*`), service/hotspot WiFi (`I2_
 - `I2_NUM_CORES` is 2 on the ESP32 and 1 on S2/C3.
 - `i2Core(core)` returns a valid core: on single-core chips always 0. This is why the same code runs on the ESP32 NodeMCU and the ESP32-S2 mini.
 - Declares `i2CreateTask(fn, name, stackBytes, arg, priority, handleOut, core)`: creates a pinned task and registers it for the `perf` report.
+- Declares the internal watchdog helpers: `i2WdtInit(timeoutS)` (a timeout resets the chip, idle tasks of all cores are watched), `i2WdtAddSelf()` (the calling task subscribes) and `i2WdtFeed()` (must be called more often than the timeout).
 
 ### 3.3 `I2Settings.h/.cpp` - settings in flash (needed)
 
@@ -195,7 +193,6 @@ Plain `#define`s: default WiFi (`I2_DEFAULT_WIFI_*`), service/hotspot WiFi (`I2_
 | `i2cfgSnapshot(out)` | thread-safe copy of the settings (take a copy, read from the copy) |
 | `i2cfgCommit(new)` | stamp magic/version/size/CRC, skip if nothing changed, write slot A, read back and compare, write slot B, read back and compare |
 | `i2cfgFactoryReset()` | commit the factory defaults |
-| `i2cfgSetPreWriteHook(fn)` | function called right before each flash write (used to kick the 555) |
 | `i2cfgFastMode/SleepSec/SlmOffsetDb/GetCal` | fast getters for values the tasks read often |
 | `i2cfgApplyCal(version, cal[4])` | store a new calibration set |
 | `i2cfgCheckAccessCode(code)` | constant-time compare (used by the portal) |
@@ -210,9 +207,9 @@ Plain `#define`s: default WiFi (`I2_DEFAULT_WIFI_*`), service/hotspot WiFi (`I2_
 flowchart TD
   A["new settings"] --> B{"same as stored?"}
   B -- yes --> Z["no write (saves flash wear)"]
-  B -- no --> C["kick 555 watchdog (hook)"]
-  C --> D["write slot A"] --> E["read back A, compare"]
-  E --> F["kick 555 again"] --> G["write slot B"] --> H["read back B, compare"]
+  B -- no --> D["write slot A"]
+  D --> E["read back A, compare"]
+  E --> G["write slot B"] --> H["read back B, compare"]
   H --> I{"both OK?"}
   I -- yes --> J["RAM copy updated, return true"]
   I -- no --> K["return false, old settings kept"]
@@ -309,7 +306,7 @@ Parts:
 
 ### 4.1 `app_config.h` - all constants (needed)
 
-Feature switches (`ENABLE_SLM`, `SLM_ENABLE_FFT`, `ENABLE_OLED`, `TEST_SINGLE_CORE`), pins, 555 watchdog pin (`-1` = not used), FSM times (`PMS_WARMUP_MS` 30 s, `PMS_MEASURE_MS` 30 s, `PMS_SLEEP_DEFAULT_S` 240, `PMS_FAST_WINDOW_MS` 60 s), LED periods (250 / 500 ms), ThingSpeak limits, priorities, core assignment, default calibration, default channel.
+Feature switches (`ENABLE_SLM`, `SLM_ENABLE_FFT`, `ENABLE_OLED`, `TEST_SINGLE_CORE`), pins, FSM times (`PMS_WARMUP_MS` 30 s, `PMS_MEASURE_MS` 30 s, `PMS_SLEEP_DEFAULT_S` 240, `PMS_FAST_WINDOW_MS` 60 s), LED periods (250 / 500 ms), ThingSpeak limits, priorities, core assignment, default calibration, default channel.
 
 `TEST_SINGLE_CORE 1` puts every task on core 0 so the ESP32 NodeMCU behaves like the single-core S2 mini - used for the load experiments.
 
@@ -319,7 +316,6 @@ Feature switches (`ENABLE_SLM`, `SLM_ENABLE_FFT`, `ENABLE_OLED`, `TEST_SINGLE_CO
 - Globals: `g_pmsState`, `g_stateStartMs`, `g_stateDurMs` (for "seconds left" on the OLED), `g_pmsHeartbeat` (FSM alive counter), `g_tsQ`, `g_tsLastStatus`, `g_tsLastOkMs`.
 - `appLatestSet/Get`: the most recent sample behind a mutex (OLED reads it).
 - Probes and counters for the perf report.
-- `hwWdtKick()`: pulse the 555 input (does nothing if the pin is `-1`).
 
 ### 4.3 `pms5003t.h/.cpp` - frame parser (needed)
 
@@ -344,7 +340,7 @@ stateDiagram-v2
 
 Each loop (every 50 ms):
 1. Wait on the task notification with a 50 ms timeout (this is both the loop delay and the wake-up on "settings changed"). The lateness of that wake-up is recorded as scheduling jitter.
-2. Increment the heartbeat, feed the software watchdog.
+2. Increment the heartbeat, feed the internal task watchdog (`i2WdtFeed`).
 3. Read the mode and sleep time (they may have changed).
 4. Unless sleeping, read all UART bytes into the parser. In MEASURE each good frame is **calibrated** (`gain*x+offset`), added to the sums and stored as "latest".
 5. State logic as in the diagram. At the end of a MEASURE window `finishWindow()` averages, adds the sound level window (`slmTakeWindow`), and puts a `TsMsg` in the queue (if full: count a drop).
@@ -404,7 +400,6 @@ Key points:
 
 - OLED task (temporary): state + seconds left, mode, PM, T/H, noise, WiFi/TS status, OTA progress bar. Frame time recorded as probe `oled_frame`.
 - LED task: toggles every 250 ms (fast) / 500 ms (normal).
-- `hw_wdt` task: kicks the 555 every `HW_WDT_PERIOD_MS` only if the FSM heartbeat advanced, so a frozen FSM stops the pulses and the 555 resets the ESP32.
 
 ### 4.8 `sensor_console.cpp` - sensor commands
 
@@ -414,12 +409,11 @@ Key points:
 
 ```mermaid
 flowchart TD
-  A["Serial, pins"] --> B["i2cfgBegin: load settings"]
-  B --> C["hook: kick 555 before flash writes"]
-  C --> D["appStateInit: queue, mutex, probes"]
+  A["Serial, pins"] --> B["i2WdtInit + i2cfgBegin: watchdog, load settings"]
+  B --> D["appStateInit: queue, mutex, probes"]
   D --> E["perfBegin: idle baseline (300 ms)"]
   E --> F["i2wifiBegin"]
-  F --> G["create tasks: pms_fsm, thingspeak, led, display, hw_wdt"]
+  F --> G["create tasks: pms_fsm, thingspeak, led, display"]
   G --> H["slmBegin"]
   H --> I["console"]
   I --> J(["loop(): sleeps forever"])
@@ -487,7 +481,7 @@ sequenceDiagram
 | `I2Perf` | needed for timing analysis | no measurements (also remove probe calls) |
 | `sound_level.*`, `sos-iir-filter.h` | optional (`ENABLE_SLM 0`) | PMS only |
 | `task_display.cpp` | temporary | final product uses the matrix |
-| 555 hook / `hw_wdt` | only if the 555 is wired | leave `PIN_HW_WDT_KICK -1` |
+| internal watchdog (`i2WdtInit`) | yes (no external parts) | no automatic reset of a frozen task |
 
 ## 8. To verify on real hardware
 
@@ -646,7 +640,10 @@ In a super-loop every action waits for the previous one: a slow HTTP request del
 NVS is wear-levelled and checks every entry. In addition the whole settings block is stored twice with a CRC, verified after writing, and skipped when unchanged (section 3.3).
 
 **What protects against a reset during a flash write?**
-The write is staged (slot A, then slot B), both are verified, and boot falls back to a valid slot or the factory defaults. The external 555 watchdog is kicked right before each write so that it cannot fire in the middle of it. The firmware reports the last reset reason (`status`), which shows whether a restart came from the watchdog, a crash or a brownout.
+The write is staged (slot A, then slot B), both are verified, and boot falls back to a valid slot or the factory defaults. The ESP32 brownout detector resets the chip when the supply voltage collapses, before the flash becomes unreliable. The firmware reports the last reset reason (`status`), which shows whether a restart came from a watchdog, a crash or a brownout.
+
+**Is an external watchdog needed?**
+No. The ESP32 has internal watchdogs (task watchdog, interrupt watchdog, RTC/system watchdog) and a brownout detector. The task watchdog is configured so that a timeout resets the chip (`i2WdtInit`, 10 s); the state machine of the sensor unit and the display task of the matrix unit feed it in every loop, and the idle tasks of all cores are watched as well. An external circuit (for example a 555) would only add protection against a failure of the chip or its supply and is not required.
 
 **Why is there both a config portal and a serial console?**
 The portal allows changing the WiFi on site with a phone, without a cable. The serial console is for installation, diagnostics and testing. Both are protected by the same access code.

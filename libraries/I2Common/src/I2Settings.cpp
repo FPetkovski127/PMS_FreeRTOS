@@ -13,7 +13,6 @@ static I2Settings        s_cfg;
 static I2Defaults        s_def;
 static SemaphoreHandle_t s_mtx = nullptr;
 static bool              s_fromNvs = false;
-static void            (*s_preWrite)() = nullptr;
 
 // ---------------------------------------------------------------------------
 static uint32_t crc32(const uint8_t* d, size_t n) {
@@ -66,11 +65,9 @@ static bool readSlot(const char* key, I2Settings& out) {
 
 // Writes slot A, verifies it, then writes slot B.
 static bool writeSlots(const I2Settings& s) {
-  if (s_preWrite) s_preWrite();
   size_t a = s_prefs.putBytes(KEY_A, &s, sizeof(s));
   I2Settings chk;
   bool okA = (a == sizeof(s)) && readSlot(KEY_A, chk) && memcmp(&chk, &s, sizeof(s)) == 0;
-  if (s_preWrite) s_preWrite();
   size_t b = s_prefs.putBytes(KEY_B, &s, sizeof(s));
   bool okB = (b == sizeof(s)) && readSlot(KEY_B, chk) && memcmp(&chk, &s, sizeof(s)) == 0;
   if (!okA || !okB) Serial.printf("[cfg] WRITE PROBLEM slotA=%d slotB=%d\n", okA, okB);
@@ -104,7 +101,6 @@ void i2cfgBegin(const I2Defaults& d) {
 
 const I2Defaults& i2cfgDefaults() { return s_def; }
 bool i2cfgLoadedFromNvs() { return s_fromNvs; }
-void i2cfgSetPreWriteHook(void (*fn)()) { s_preWrite = fn; }
 
 void i2cfgSnapshot(I2Settings& out) {
   xSemaphoreTake(s_mtx, portMAX_DELAY);

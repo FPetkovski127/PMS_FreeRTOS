@@ -225,7 +225,7 @@ static void showAll(const I2Settings& s) {
 static const char* resetReasonName() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:   return "power-on";
-    case ESP_RST_EXT:       return "EXTERNAL reset pin (hardware watchdog / button)";
+    case ESP_RST_EXT:       return "external reset (EN pin / button)";
     case ESP_RST_SW:        return "software restart";
     case ESP_RST_PANIC:     return "PANIC / crash";
     case ESP_RST_INT_WDT:   return "interrupt watchdog";

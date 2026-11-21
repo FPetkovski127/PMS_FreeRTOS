@@ -129,9 +129,11 @@ static void displayTask(void*) {
   matrix.setBrightness(MATRIX_BRIGHTNESS);
   matrix.setFont();           // default 6x8 font: one character = 6 pixels
   int offset = MATRIX_W;
+  i2WdtAddSelf();             // internal watchdog: a frozen display task resets the unit
 
   for (;;) {
     uint32_t t0 = perfNowUs();
+    i2WdtFeed();
     matrix.fillScreen(0);
 
     if (!i2wifiConnected()) {                                  // link down -> "Connecting.."
@@ -199,6 +201,7 @@ void setup() {
   delay(500);
   Serial.printf("\n=== Matrix display unit, firmware %s ===\n", FW_VERSION);
 
+  i2WdtInit(WDT_TIMEOUT_S);
   i2cfgBegin(DEFAULTS);
   s_dataQ = xQueueCreate(1, sizeof(MatrixData));
   perfAddProbe(&pr_tsRead);

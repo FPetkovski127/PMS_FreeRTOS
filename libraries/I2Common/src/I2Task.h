@@ -24,3 +24,12 @@ inline BaseType_t i2Core(BaseType_t wanted) {
 // Stack size is in BYTES (ESP-IDF FreeRTOS).
 BaseType_t i2CreateTask(TaskFunction_t fn, const char* name, uint32_t stackBytes,
                         void* arg, UBaseType_t prio, TaskHandle_t* out, BaseType_t core);
+
+// Internal task watchdog of the ESP32 (no external parts needed).
+//  i2WdtInit    : timeout in seconds; a timeout RESETS the chip (panic). The idle tasks of all
+//                 cores are watched, so a task that never blocks (starves the idle task) is detected.
+//  i2WdtAddSelf : the calling task registers itself ...
+//  i2WdtFeed    : ... and must call this regularly (more often than the timeout).
+void i2WdtInit(uint32_t timeoutS);
+void i2WdtAddSelf();
+void i2WdtFeed();

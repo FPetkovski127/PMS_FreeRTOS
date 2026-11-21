@@ -66,7 +66,7 @@ static void finishWindow(const Acc& a) {
 void pmsTask(void*) {
   pmsSerial.setRxBufferSize(512);                       // must be set before begin()
   pmsSerial.begin(9600, SERIAL_8N1, PIN_PMS_RX, PIN_PMS_TX);
-  esp_task_wdt_add(NULL);                               // software watchdog on this task
+  i2WdtAddSelf();                                       // internal watchdog watches this task
 
   PmsParser parser;
   Acc acc;
@@ -84,7 +84,7 @@ void pmsTask(void*) {
     }
 
     g_pmsHeartbeat++;
-    esp_task_wdt_reset();
+    i2WdtFeed();
 
     const bool fast = i2cfgFastMode();
     const uint32_t sleepMs = (uint32_t)i2cfgSleepSec() * 1000UL;

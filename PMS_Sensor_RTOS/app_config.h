@@ -27,13 +27,9 @@
 #define PIN_I2S_WS            5        // INMP441 WS
 #define PIN_I2S_SD            33       // INMP441 SD   (L/R pin of the mic -> GND)
 
-// External 555 hardware watchdog. -1 = not wired / not used.
-// The unit pulses this pin while it is healthy; if the pulses stop the 555
-// resets the ESP32 (EN pin).
-#define PIN_HW_WDT_KICK       -1
-#define HW_WDT_ACTIVE_LEVEL   HIGH
-#define HW_WDT_PULSE_MS       50
-#define HW_WDT_PERIOD_MS      10000UL
+// Internal watchdog (ESP32 task watchdog, no external parts needed): the chip
+// is reset if the PMS state machine or an idle task does not report in time.
+#define WDT_TIMEOUT_S         10
 
 // ----------------------------------------------------------- FSM timings ----
 #define PMS_WARMUP_MS         30000UL  // state 1: fan on, sensor warming up (data discarded)

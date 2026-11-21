@@ -20,6 +20,9 @@
 #define TS_RETRY_MS           10000UL   // after a failed read
 #define NO_DATA_RESTART_MS    (30UL * 60UL * 1000UL)   // WiFi up but no good read for 30 min -> restart
 
+// Internal watchdog (ESP32 task watchdog): reset if the display task or an idle task hangs.
+#define WDT_TIMEOUT_S         10
+
 // ---------------------------------------------------------------- RTOS layout --
 // The scroll must stay smooth while the (blocking) HTTP request runs, so the
 // display has the higher priority and, on the ESP32, its own core.

@@ -1,5 +1,7 @@
 #include "I2Perf.h"
 #include "esp_freertos_hooks.h"
+#include <esp_task_wdt.h>
+#include <esp_idf_version.h>
 #include <string.h>
 
 #define PERF_MAX_PROBES   24
@@ -25,6 +27,23 @@ BaseType_t i2CreateTask(TaskFunction_t fn, const char* name, uint32_t stackBytes
   }
   return r;
 }
+
+// ---------------------------------------------------------------------------
+//  Internal task watchdog helpers (declared in I2Task.h)
+// ---------------------------------------------------------------------------
+void i2WdtInit(uint32_t timeoutS) {
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+  esp_task_wdt_config_t c = {};
+  c.timeout_ms = timeoutS * 1000;
+  c.idle_core_mask = (1 << I2_NUM_CORES) - 1;     // watch the idle task of every core
+  c.trigger_panic = true;                         // reset the chip on timeout
+  if (esp_task_wdt_reconfigure(&c) != ESP_OK) esp_task_wdt_init(&c);
+#else
+  esp_task_wdt_init(timeoutS, true);              // true = panic -> reset
+#endif
+}
+void i2WdtAddSelf() { esp_task_wdt_add(NULL); }
+void i2WdtFeed()    { esp_task_wdt_reset(); }
 
 void perfAddProbe(PerfProbe* p)     { if (s_nProbes < PERF_MAX_PROBES) s_probes[s_nProbes++] = p; }
 void perfAddCounter(PerfCounter* c) { if (s_nCounters < PERF_MAX_COUNTERS) s_counters[s_nCounters++] = c; }

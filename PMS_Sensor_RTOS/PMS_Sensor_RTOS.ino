@@ -42,13 +42,9 @@ void setup() {
   pinMode(PIN_PMS_SET, OUTPUT);
   digitalWrite(PIN_PMS_SET, LOW);
   pinMode(PIN_LED, OUTPUT);
-#if PIN_HW_WDT_KICK >= 0
-  pinMode(PIN_HW_WDT_KICK, OUTPUT);
-  digitalWrite(PIN_HW_WDT_KICK, !HW_WDT_ACTIVE_LEVEL);
-#endif
 
+  i2WdtInit(WDT_TIMEOUT_S);             // internal task watchdog: reset if a watched task hangs
   i2cfgBegin(DEFAULTS);                 // settings from flash (or factory defaults)
-  i2cfgSetPreWriteHook(hwWdtKick);      // kick the 555 right before every flash write
   appStateInit();
   perfBegin();                          // CPU idle baseline - before the other tasks start
 
@@ -60,9 +56,6 @@ void setup() {
   i2CreateTask(ledTask,     "led",        2048, NULL, PRIO_LED,     NULL,       CORE_NET);
 #if ENABLE_OLED
   i2CreateTask(displayTask, "display",    5000, NULL, PRIO_DISPLAY, NULL,       CORE_NET);
-#endif
-#if PIN_HW_WDT_KICK >= 0
-  i2CreateTask(hwWdtTask,   "hw_wdt",     2048, NULL, PRIO_PMS,     NULL,       CORE_NET);
 #endif
   slmBegin();                           // no-op when ENABLE_SLM is 0
   sensorConsoleInit();
