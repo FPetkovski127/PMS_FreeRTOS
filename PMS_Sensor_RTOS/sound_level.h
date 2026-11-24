@@ -20,6 +20,7 @@ SlmStatus slmStatus();
 bool      slmTakeWindow(float* laeq, float* lamax);
 void      slmRequestFft();         // prints one spectrum (START/END format of inmp441.py)
 void      slmPrint(Print& out);    // statistics for the console
+void      slmDiag(Print& out);     // 'slm raw': raw microphone data statistics
 #else
 inline void      slmBegin() {}
 inline void      slmSetActive(bool) {}
@@ -28,4 +29,5 @@ inline SlmStatus slmStatus() { return SlmStatus{false, false, 0, 0, false, false
 inline bool      slmTakeWindow(float*, float*) { return false; }
 inline void      slmRequestFft() {}
 inline void      slmPrint(Print& out) { out.println("SLM disabled (ENABLE_SLM 0)"); }
+inline void      slmDiag(Print& out) { out.println("SLM disabled (ENABLE_SLM 0)"); }
 #endif

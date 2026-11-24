@@ -27,6 +27,13 @@
 #define PIN_I2S_WS            5        // INMP441 WS
 #define PIN_I2S_SD            33       // INMP441 SD   (L/R pin of the mic -> GND)
 
+// I2S microphone options. If the level stays at the minimum (raw data all zero):
+//  * the mic L/R pin to GND = LEFT slot, to 3.3 V = RIGHT slot
+//  * the newer Arduino-ESP32 cores swapped LEFT/RIGHT in the legacy driver. On the bench
+//    unit (mic L/R pin on GND) LEFT gave all zeros and RIGHT worked, so RIGHT is the default.
+#define SLM_I2S_CHANNEL       I2S_CHANNEL_FMT_ONLY_RIGHT     // or I2S_CHANNEL_FMT_ONLY_LEFT
+#define SLM_USE_APLL          0        // 1 = audio PLL (more accurate 48 kHz), 0 = default clock (known to work)
+
 // Internal watchdog (ESP32 task watchdog, no external parts needed): the chip
 // is reset if the PMS state machine or an idle task does not report in time.
 #define WDT_TIMEOUT_S         10

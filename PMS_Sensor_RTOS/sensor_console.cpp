@@ -14,6 +14,7 @@ static const char* HELP_EXT =
   "  slm                     sound level meter status\n"
   "  slm on|off              start / stop the microphone processing\n"
   "  slm fft                 print one spectrum (START/END format for inmp441.py)\n"
+  "  slm raw                 microphone diagnostics: are raw I2S words non-zero?\n"
   "  slm ref <dB>            (login) calibrate: mic is in front of a <dB> calibrator right now\n"
   "  cal                     show active + pending calibration\n"
   "  cal fetch               check the calibration channel now\n"
@@ -59,6 +60,7 @@ static bool handleSlm(const String& args) {
   if (args == "on")  { slmSetActive(true);  Serial.println("SLM started"); return true; }
   if (args == "off") { slmSetActive(false); Serial.println("SLM stopped"); return true; }
   if (args == "fft") { slmRequestFft(); return true; }
+  if (args == "raw") { slmDiag(Serial); return true; }
   if (args.startsWith("ref ")) {
     if (!i2consoleRequireAuth()) return true;
     float ref = args.substring(4).toFloat();

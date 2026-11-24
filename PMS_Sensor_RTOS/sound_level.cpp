@@ -43,12 +43,6 @@
 #define MIC_NOISE_DB      33.0                     // noise floor (61 dB SNR)
 #define MIC_BITS          24
 
-#if defined(CONFIG_IDF_TARGET_ESP32) && CONFIG_IDF_TARGET_ESP32
-  #define SLM_USE_APLL true
-#else
-  #define SLM_USE_APLL false
-#endif
-
 // ----------------------------------------------------------------- filters --
 // INMP441 equalizer (Fs = 48 kHz)
 static SOS_IIR_Filter FILT_MIC(1.00197834654696f, {
@@ -83,6 +77,13 @@ static PerfProbe   pr_slmCalc  = PERF_PROBE_INIT("slm_calc", 125000);
 static PerfProbe   pr_slmFft   = PERF_PROBE_INIT("slm_fft", 0);
 static PerfCounter ct_slmDrop  = PERF_COUNTER_INIT("slm_block_dropped");
 
+// ---- diagnostics for 'slm raw' (why is the level at the minimum?) ----
+static esp_err_t     s_errInstall = ESP_OK, s_errPins = ESP_OK;
+static volatile bool s_dbgReq = false, s_dbgReady = false;
+static int32_t       s_dbgMin = 0, s_dbgMax = 0, s_dbgFirst[4] = {0, 0, 0, 0};
+static float         s_dbgSumSPL = 0, s_dbgSumW = 0;
+static volatile uint32_t s_blocks = 0;
+
 #if SLM_ENABLE_FFT
 static volatile bool s_fftWanted = false, s_fftReady = false;
 static float  s_fftIn[FFT_N];
@@ -101,7 +102,7 @@ static void micInit() {
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
   cfg.sample_rate = SLM_SAMPLE_RATE;
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
-  cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;           // mic L/R pin -> GND
+  cfg.channel_format = SLM_I2S_CHANNEL;                      // see app_config.h
   cfg.communication_format = I2S_COMM_FORMAT_I2S;
   cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count = DMA_BANKS;
@@ -119,8 +120,9 @@ static void micInit() {
   pins.data_out_num = I2S_PIN_NO_CHANGE;
   pins.data_in_num = PIN_I2S_SD;
 
-  i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
-  i2s_set_pin(I2S_PORT, &pins);
+  s_errInstall = i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
+  s_errPins = i2s_set_pin(I2S_PORT, &pins);
+  Serial.printf("[slm] i2s install=%d set_pin=%d (0 = OK)  apll=%d\n", (int)s_errInstall, (int)s_errPins, (int)SLM_USE_APLL);
 }
 
 // ------------------------------------------------------------ reader task ---
@@ -147,6 +149,15 @@ static void slmReaderTask(void*) {
     if (br != SAMPLES_SHORT * sizeof(int32_t)) continue;
 
     uint32_t t0 = perfNowUs();                       // -------- measured section --------
+    if (s_dbgReq) {                                  // 'slm raw': statistics of the RAW words
+      int32_t* raw = (int32_t*)s_samples;
+      int32_t mn = raw[0], mx = raw[0];
+      for (int i = 0; i < SAMPLES_SHORT; i++) { if (raw[i] < mn) mn = raw[i]; if (raw[i] > mx) mx = raw[i]; }
+      s_dbgMin = mn; s_dbgMax = mx;
+      for (int i = 0; i < 4; i++) s_dbgFirst[i] = raw[i];
+      s_dbgReady = true;
+      s_dbgReq = false;
+    }
     for (int i = 0; i < SAMPLES_SHORT; i++) {        // int32 (24 valid bits) -> float, in place
       int32_t v;
       memcpy(&v, &s_samples[i], sizeof(v));
@@ -163,6 +174,9 @@ static void slmReaderTask(void*) {
     q.sumSqrSPL = FILT_MIC.filter(s_samples, s_samples, SAMPLES_SHORT);   // equalized, unweighted
     q.sumSqrW   = FILT_A.filter(s_samples, s_samples, SAMPLES_SHORT);     // A-weighted
     q.procUs = perfNowUs() - t0;                     // ------------------------------------
+    s_dbgSumSPL = q.sumSqrSPL;
+    s_dbgSumW = q.sumSqrW;
+    s_blocks++;
     perfRecord(&pr_slmBlock, q.procUs);
 
     if (xQueueSend(s_q, &q, 0) != pdTRUE) perfCount(ct_slmDrop);   // calc task too slow
@@ -289,5 +303,25 @@ void slmPrint(Print& out) {
              s.running ? "running" : "stopped", s.leq1s, s.lshort, s.overload, s.low, i2cfgSlmOffsetDb());
   out.printf("     window since last upload: %lu valid seconds, %lu overloaded\n",
              (unsigned long)s_winCount, (unsigned long)s_winOverloads);
+}
+
+// 'slm raw': is the microphone delivering data at all?
+void slmDiag(Print& out) {
+  out.printf("I2S driver: install=%d set_pin=%d (0 = OK), blocks processed: %lu\n",
+             (int)s_errInstall, (int)s_errPins, (unsigned long)s_blocks);
+  s_dbgReady = false;
+  s_dbgReq = true;
+  for (int i = 0; i < 40 && !s_dbgReady; i++) vTaskDelay(pdMS_TO_TICKS(25));   // wait for the next block
+  if (!s_dbgReady) { out.println("no block received in 1 s: i2s_read does not return -> check SCK/WS wiring and the I2S install result"); return; }
+  out.printf("raw 32-bit words: min %ld  max %ld  first four: %08lX %08lX %08lX %08lX\n",
+             (long)s_dbgMin, (long)s_dbgMax, (unsigned long)s_dbgFirst[0], (unsigned long)s_dbgFirst[1],
+             (unsigned long)s_dbgFirst[2], (unsigned long)s_dbgFirst[3]);
+  out.printf("sum of squares: equalised %g   A-weighted %g\n", (double)s_dbgSumSPL, (double)s_dbgSumW);
+  if (s_dbgMin == 0 && s_dbgMax == 0)
+    out.println("-> ALL ZERO: the microphone sends nothing in the selected slot. Check SD pin, L/R pin (GND = left, 3.3 V = right) and try the other SLM_I2S_CHANNEL.");
+  else if (isnan(s_dbgSumW) || isnan(s_dbgSumSPL))
+    out.println("-> raw data are fine but the filter result is NaN: filter problem, not the microphone.");
+  else
+    out.println("-> the microphone delivers data. If the level is still wrong the problem is in the calculation.");
 }
 #endif // ENABLE_SLM
