@@ -14,9 +14,7 @@ static const char*   s_extHelp = "";
 static I2ConsoleHook s_onStatus = nullptr;
 static I2ConsoleHook s_onChanged = nullptr;
 
-// ---------------------------------------------------------------------------
-//  Field table (shared by 'set', 'show' and the wizard)
-// ---------------------------------------------------------------------------
+// settings fields (used by 'set', 'show' and the wizard)
 enum Field {
   F_SSID, F_PASS, F_CHANNEL, F_WKEY, F_RKEY, F_CFGCH, F_CFGKEY, F_MODE, F_SLEEP,
   F_PM25G, F_PM25O, F_PM10G, F_PM10O, F_TG, F_TO, F_HG, F_HO, F_SLM, F_COUNT
@@ -161,9 +159,7 @@ static int findField(const String& key) {
   return -1;
 }
 
-// ---------------------------------------------------------------------------
-//  Authentication
-// ---------------------------------------------------------------------------
+// access code
 static bool     s_unlocked = false;
 static uint32_t s_unlockedAt = 0;
 static uint8_t  s_fails = 0;
@@ -207,9 +203,7 @@ static void doLogin(const String& code) {
   }
 }
 
-// ---------------------------------------------------------------------------
-//  Output helpers
-// ---------------------------------------------------------------------------
+// output helpers
 static void changed() { if (s_onChanged) s_onChanged(); }
 
 static void showAll(const I2Settings& s) {
@@ -264,9 +258,7 @@ static void printHelp() {
   Serial.print(s_extHelp);
 }
 
-// ---------------------------------------------------------------------------
-//  Wizard
-// ---------------------------------------------------------------------------
+// setup wizard
 static struct {
   bool active = false;
   bool confirm = false;
@@ -332,9 +324,7 @@ static void wizLine(String line) {
   }
 }
 
-// ---------------------------------------------------------------------------
-//  Command dispatcher
-// ---------------------------------------------------------------------------
+// command handling
 static void handleLine(String line) {
   if (W.active) { wizLine(line); return; }
   line.trim();
@@ -401,7 +391,6 @@ static void handleLine(String line) {
   Serial.println("Unknown command. Type 'help'.");
 }
 
-// ---------------------------------------------------------------------------
 static void consoleTask(void*) {
   String line;
   char prev = 0;

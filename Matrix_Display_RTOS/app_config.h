@@ -1,31 +1,28 @@
 #pragma once
-// ============================================================================
-//  Matrix_Display_RTOS - ALL tunable constants live here
-// ============================================================================
+// constants of the matrix display unit
 #include <Arduino.h>
 #include "I2Common.h"
 
 #define FW_VERSION            "2.0-rtos"
 
-// -------------------------------------------------------------------- matrix --
+// matrix
 #define PIN_DIN               5
-#define MATRIX_W              16        // test panel 16x8, final project 64x8
+#define MATRIX_W              16        // test panel 16x8, final display 64x8
 #define MATRIX_H              8
 #define MATRIX_BRIGHTNESS     20
-#define SCROLL_DELAY_MS       60        // smaller panel -> larger delay reads better
+#define SCROLL_DELAY_MS       60
 #define CONNECTING_DELAY_MS   100
 
-// ---------------------------------------------------------------- ThingSpeak --
-#define TS_READ_MS            30000UL   // normal reading period
+// ThingSpeak
+#define TS_READ_MS            30000UL   // reading period
 #define TS_RETRY_MS           10000UL   // after a failed read
-#define NO_DATA_RESTART_MS    (30UL * 60UL * 1000UL)   // WiFi up but no good read for 30 min -> restart
+#define NO_DATA_RESTART_MS    (30UL * 60UL * 1000UL)   // restart if WiFi is up but nothing was read for 30 min
 
-// Internal watchdog (ESP32 task watchdog): reset if the display task or an idle task hangs.
+// task watchdog timeout, the chip resets when the display task hangs
 #define WDT_TIMEOUT_S         10
 
-// ---------------------------------------------------------------- RTOS layout --
-// The scroll must stay smooth while the (blocking) HTTP request runs, so the
-// display has the higher priority and, on the ESP32, its own core.
+// tasks (the display has a higher priority and its own core so the scrolling
+// is not delayed by the HTTP request)
 #define TEST_SINGLE_CORE      0
 #define PRIO_DISPLAY          3
 #define PRIO_TS               2
@@ -37,6 +34,6 @@
   #define CORE_NET            I2_CORE_PRO
 #endif
 
-// ------------------------------------------------------------ factory values --
+// factory values
 #define DEFAULT_CHANNEL_ID    3095045UL
 #define DEFAULT_READ_KEY      "JM9QEV7SW8RKWRQZ"

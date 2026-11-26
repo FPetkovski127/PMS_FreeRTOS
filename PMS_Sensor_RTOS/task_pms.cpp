@@ -1,14 +1,7 @@
-// ============================================================================
-//  PMS FSM task:   WARMUP (30 s) -> MEASURE (30 s) -> SLEEP (240 s) -> WARMUP ...
-//
-//   WARMUP  sensor fan ON, frames are read and discarded
-//   MEASURE samples are calibrated, summed, averaged at the end of the window
-//           and the average is handed to the ThingSpeak task through a queue
-//   SLEEP   sensor OFF (SET = LOW). The wait can be interrupted by a task
-//           notification (mode change / new sleep time) - no polling of "stale" time.
-//   FAST mode: the SLEEP state is skipped, the sensor stays ON and MEASURE
-//           repeats with PMS_FAST_WINDOW_MS (no new warm-up needed).
-// ============================================================================
+// State machine of the sensor: WARMUP (fan on, data discarded) -> MEASURE (samples are
+// calibrated and averaged, the average goes to the upload task) -> SLEEP (fan off).
+// In fast mode SLEEP is skipped and MEASURE repeats. The sleep wait ends early when the
+// task gets a notification (mode changed).
 #include "app_state.h"
 #include "pms5003t.h"
 #include "sound_level.h"
@@ -64,9 +57,9 @@ static void finishWindow(const Acc& a) {
 }
 
 void pmsTask(void*) {
-  pmsSerial.setRxBufferSize(512);                       // must be set before begin()
+  pmsSerial.setRxBufferSize(512);                       // before begin()
   pmsSerial.begin(9600, SERIAL_8N1, PIN_PMS_RX, PIN_PMS_TX);
-  i2WdtAddSelf();                                       // internal watchdog watches this task
+  i2WdtAddSelf();
 
   PmsParser parser;
   Acc acc;
@@ -74,13 +67,13 @@ void pmsTask(void*) {
   enterState(PMS_WARMUP, PMS_WARMUP_MS);
 
   for (;;) {
-    // The wait doubles as the loop delay and as the "settings changed" wake-up.
+    // this wait is the loop delay and ends early when the settings change
     uint32_t t0 = perfNowUs();
     uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(PMS_LOOP_MS));
     uint32_t t1 = perfNowUs();
     if (!notified) {
       uint32_t waited = t1 - t0, expected = PMS_LOOP_MS * 1000UL;
-      perfRecord(&pr_pmsPeriod, waited > expected ? waited - expected : 0);   // lateness = jitter
+      perfRecord(&pr_pmsPeriod, waited > expected ? waited - expected : 0);   // how late the task woke up
     }
 
     g_pmsHeartbeat++;
@@ -113,7 +106,7 @@ void pmsTask(void*) {
           finishWindow(acc);
           acc = Acc();
           if (fast) {
-            enterState(PMS_MEASURE, PMS_FAST_WINDOW_MS);     // stay on, no sleep
+            enterState(PMS_MEASURE, PMS_FAST_WINDOW_MS);     // fast mode: no sleep
           } else {
             sensorPower(false);
             parser.reset();
@@ -125,7 +118,7 @@ void pmsTask(void*) {
 
       case PMS_SLEEP:
         g_stateDurMs = sleepMs;
-        if (fast || el >= sleepMs) {                         // fast mode interrupts the sleep
+        if (fast || el >= sleepMs) {                         // fast mode ends the sleep
           sensorPower(true);
           parser.reset();
           flushUart();

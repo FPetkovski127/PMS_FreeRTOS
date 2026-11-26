@@ -11,7 +11,7 @@ volatile uint32_t g_tsLastOkMs = 0;
 static SemaphoreHandle_t s_latestMtx = nullptr;
 static PmsSample         s_latest = {0, 0, 0, 0};
 
-PerfProbe pr_pmsPeriod = PERF_PROBE_INIT("pms_wake_late", PMS_LOOP_MS * 1000UL);   // late > 1 period = bad
+PerfProbe pr_pmsPeriod = PERF_PROBE_INIT("pms_wake_late", PMS_LOOP_MS * 1000UL);
 PerfProbe pr_pmsBody   = PERF_PROBE_INIT("pms_loop_body", PMS_LOOP_MS * 1000UL);
 PerfProbe pr_tsHttp    = PERF_PROBE_INIT("ts_http", 0);
 PerfProbe pr_oled      = PERF_PROBE_INIT("oled_frame", 250000UL);

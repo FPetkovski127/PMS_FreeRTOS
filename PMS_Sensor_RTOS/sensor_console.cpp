@@ -1,7 +1,5 @@
-// ============================================================================
-//  Sensor-specific serial commands:  perf ...   slm ...   cal ...
-//  (generic ones - help, status, show, login, setup, set ... - live in I2Console)
-// ============================================================================
+// serial commands of the sensor unit: perf, slm, cal
+// (help, status, show, login, setup, set ... are in I2Console)
 #include "app_state.h"
 #include "sound_level.h"
 
@@ -121,7 +119,7 @@ static void sensorStatus() {
   slmPrint(Serial);
 }
 
-// A mode / sleep change must wake the FSM (it may be sleeping for minutes).
+// a mode or sleep time change wakes the state machine
 static void settingsChanged() { if (g_pmsTask) xTaskNotifyGive(g_pmsTask); }
 
 void sensorConsoleInit() { i2consoleBegin(sensorExt, HELP_EXT, sensorStatus, settingsChanged); }

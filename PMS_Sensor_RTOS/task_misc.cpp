@@ -1,6 +1,4 @@
-// ============================================================================
-//  Small housekeeping task: status LED
-// ============================================================================
+// status LED
 #include "app_state.h"
 
 // LED toggles every LED_FAST_MS (fast mode) or LED_NORMAL_MS (normal mode).

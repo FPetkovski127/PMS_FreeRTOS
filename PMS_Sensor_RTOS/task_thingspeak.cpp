@@ -1,14 +1,6 @@
-// ============================================================================
-//  ThingSpeak task - the ONLY place that touches the network client.
-//   * receives averaged results from the FSM through g_tsQ (FSM never blocks
-//     on HTTP any more)
-//   * uploads with retries and the 15 s ThingSpeak rate limit
-//   * every hour reads the calibration set from the calibration channel
-//     (field 1 = "version,g25,o25,g10,o10,gT,oT,gH,oH")
-//
-//  ThingSpeak fields (data channel):
-//    1 PM2.5   2 PM10   3 temperature   4 humidity   5 LAeq [dBA]   6 LAmax [dBA]
-// ============================================================================
+// ThingSpeak task: uploads the averages from the queue (with retries) and checks the
+// calibration channel (field 1 = "version,g25,o25,g10,o10,gT,oT,gH,oH").
+// Data channel fields: 1 PM2.5, 2 PM10, 3 temperature, 4 humidity, 5 LAeq, 6 LAmax.
 #include "app_state.h"
 #include <WiFi.h>
 #include <ThingSpeak.h>
@@ -17,7 +9,7 @@ static WiFiClient s_client;
 static uint32_t   s_lastWriteMs = 0;
 static volatile bool s_fetchNow = false;
 
-// ---- pending (not yet accepted) remote calibration ----
+// remote calibration that has not been accepted yet
 static CalPending s_pending = {false, 0, {{1, 0}, {1, 0}, {1, 0}, {1, 0}}};
 static uint32_t   s_rejectedVer = 0;
 static portMUX_TYPE s_calMux = portMUX_INITIALIZER_UNLOCKED;
@@ -50,7 +42,6 @@ void calRejectPending() {
 
 void calRequestFetch() { s_fetchNow = true; }
 
-// ---------------------------------------------------------------------------
 static bool uploadOnce(const TsMsg& m, const I2Settings& c) {
   ThingSpeak.setField(1, m.d.pm2_5);
   ThingSpeak.setField(2, m.d.pm10);

@@ -1,19 +1,13 @@
-// ============================================================================
-//  Sound level meter (INMP441 on I2S) - based on the method of
-//  https://github.com/ikostoski/esp32-i2s-slm (GPL-3.0, (c)2019 Ivan Kostoski)
+// Sound level meter with the INMP441 on I2S. The method (IIR filters in second-order
+// sections, reader task + calculation task) is taken from esp32-i2s-slm by Ivan Kostoski
+// (https://github.com/ikostoski/esp32-i2s-slm, GPL-3.0).
 //
-//   mic_reader (high prio)   i2s_read 125 ms block (6000 samples @ 48 kHz)
-//                            -> int24 -> float -> mic equalizer IIR -> A-weighting IIR
-//                            -> only two sums of squares leave the task
-//   slm_calc  (low prio)     sums -> dB, 1 s Leq, overload / noise-floor flags,
-//                            energy average + max for the ThingSpeak window,
-//                            optional FFT on request
+// slm_reader: reads a 125 ms block (6000 samples at 48 kHz), converts it to float, applies the
+//             microphone equalizer and the A-weighting and sends two sums of squares.
+// slm_calc:   converts the sums to dB, calculates the 1 s Leq and the average / maximum for
+//             the upload window, runs the FFT when requested.
 //
-//  dB maths:  L = offset + 94 + 10*log10( meanSquare / refSquare )
-//             (identical to 20*log10(RMS/ref) - the 10*log10 form on the
-//              POWER (mean square) saves one sqrt() per block)
-//  Levels are averaged in the ENERGY domain (10^(L/10)), never as dB values.
-// ============================================================================
+// level = offset + 94 + 10*log10(mean square / ref^2), levels are averaged as energy.
 #include "app_config.h"
 
 #if ENABLE_SLM
@@ -26,8 +20,8 @@
 #include <arduinoFFT.h>
 #endif
 
-// ----------------------------------------------------------- configuration --
-#define SLM_SAMPLE_RATE   48000                    // fixed by the IIR filter design
+// configuration
+#define SLM_SAMPLE_RATE   48000                    // the filters are designed for 48 kHz
 #define SLM_SAMPLE_BITS   32
 #define SAMPLES_SHORT     (SLM_SAMPLE_RATE / 8)    // 125 ms block
 #define DMA_BANK_SIZE     (SAMPLES_SHORT / 16)
@@ -43,7 +37,7 @@
 #define MIC_NOISE_DB      33.0                     // noise floor (61 dB SNR)
 #define MIC_BITS          24
 
-// ----------------------------------------------------------------- filters --
+// filters
 // INMP441 equalizer (Fs = 48 kHz)
 static SOS_IIR_Filter FILT_MIC(1.00197834654696f, {
   {-1.986920458344451f, +0.986963226946616f, +1.995178510504166f, -0.995184322194091f}
@@ -56,7 +50,7 @@ static SOS_IIR_Filter FILT_A(0.169994948147430f, {
   {-0.70930303489759f,  -0.29071868393580f,  +1.982242159753048f, -0.982298594928989f}
 });
 
-// ------------------------------------------------------------------- state --
+// state
 struct SlmBlock { float sumSqrSPL; float sumSqrW; uint32_t procUs; };
 
 static QueueHandle_t     s_q = nullptr;
@@ -72,12 +66,12 @@ static double   s_winEnergy = 0;
 static uint32_t s_winCount = 0, s_winOverloads = 0;
 static float    s_winMax = -1000.0f;
 
-static PerfProbe   pr_slmBlock = PERF_PROBE_INIT("slm_block", 125000);   // budget = block period
+static PerfProbe   pr_slmBlock = PERF_PROBE_INIT("slm_block", 125000);   // budget = block length
 static PerfProbe   pr_slmCalc  = PERF_PROBE_INIT("slm_calc", 125000);
 static PerfProbe   pr_slmFft   = PERF_PROBE_INIT("slm_fft", 0);
 static PerfCounter ct_slmDrop  = PERF_COUNTER_INIT("slm_block_dropped");
 
-// ---- diagnostics for 'slm raw' (why is the level at the minimum?) ----
+// values for 'slm raw'
 static esp_err_t     s_errInstall = ESP_OK, s_errPins = ESP_OK;
 static volatile bool s_dbgReq = false, s_dbgReady = false;
 static int32_t       s_dbgMin = 0, s_dbgMax = 0, s_dbgFirst[4] = {0, 0, 0, 0};
@@ -93,10 +87,10 @@ static ArduinoFFT<double> s_fft = ArduinoFFT<double>(s_vReal, s_vImag, FFT_N, (d
 
 static double dbOf(double meanSq, double offsetDb) {
   double db = offsetDb + MIC_REF_DB + 10.0 * log10(meanSq / s_refSq);
-  return (db > -200.0) ? db : -200.0;               // also catches log10(0) = -inf
+  return (db > -200.0) ? db : -200.0;               // also covers log10(0)
 }
 
-// -------------------------------------------------------------------- I2S ---
+// I2S
 static void micInit() {
   i2s_config_t cfg = {};
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
@@ -113,7 +107,7 @@ static void micInit() {
 
   i2s_pin_config_t pins = {};
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
-  pins.mck_io_num = I2S_PIN_NO_CHANGE;                      // do not drive GPIO0 as MCLK
+  pins.mck_io_num = I2S_PIN_NO_CHANGE;                      // no MCLK output
 #endif
   pins.bck_io_num = PIN_I2S_SCK;
   pins.ws_io_num = PIN_I2S_WS;
@@ -125,11 +119,11 @@ static void micInit() {
   Serial.printf("[slm] i2s install=%d set_pin=%d (0 = OK)  apll=%d\n", (int)s_errInstall, (int)s_errPins, (int)SLM_USE_APLL);
 }
 
-// ------------------------------------------------------------ reader task ---
+// reader task
 static void slmReaderTask(void*) {
   micInit();
   size_t br = 0;
-  i2s_read(I2S_PORT, s_samples, sizeof(s_samples), &br, portMAX_DELAY);   // mic start-up block (INMP441 up to 83 ms)
+  i2s_read(I2S_PORT, s_samples, sizeof(s_samples), &br, portMAX_DELAY);   // first block is discarded (mic start-up)
   bool wasActive = true;
 
   for (;;) {
@@ -148,8 +142,8 @@ static void slmReaderTask(void*) {
     i2s_read(I2S_PORT, s_samples, SAMPLES_SHORT * sizeof(int32_t), &br, portMAX_DELAY);   // blocks ~125 ms
     if (br != SAMPLES_SHORT * sizeof(int32_t)) continue;
 
-    uint32_t t0 = perfNowUs();                       // -------- measured section --------
-    if (s_dbgReq) {                                  // 'slm raw': statistics of the RAW words
+    uint32_t t0 = perfNowUs();                       // start of the timed part
+    if (s_dbgReq) {                                  // 'slm raw': statistics of the raw words
       int32_t* raw = (int32_t*)s_samples;
       int32_t mn = raw[0], mx = raw[0];
       for (int i = 0; i < SAMPLES_SHORT; i++) { if (raw[i] < mn) mn = raw[i]; if (raw[i] > mx) mx = raw[i]; }
@@ -165,25 +159,25 @@ static void slmReaderTask(void*) {
     }
 #if SLM_ENABLE_FFT
     if (s_fftWanted) {
-      memcpy(s_fftIn, s_samples, sizeof(s_fftIn));   // raw copy for the spectrum
+      memcpy(s_fftIn, s_samples, sizeof(s_fftIn));   // copy for the spectrum
       s_fftWanted = false;
       s_fftReady = true;
     }
 #endif
     SlmBlock q;
-    q.sumSqrSPL = FILT_MIC.filter(s_samples, s_samples, SAMPLES_SHORT);   // equalized, unweighted
-    q.sumSqrW   = FILT_A.filter(s_samples, s_samples, SAMPLES_SHORT);     // A-weighted
-    q.procUs = perfNowUs() - t0;                     // ------------------------------------
+    q.sumSqrSPL = FILT_MIC.filter(s_samples, s_samples, SAMPLES_SHORT);   // equalizer only
+    q.sumSqrW   = FILT_A.filter(s_samples, s_samples, SAMPLES_SHORT);     // A-weighting
+    q.procUs = perfNowUs() - t0;                     // end of the timed part
     s_dbgSumSPL = q.sumSqrSPL;
     s_dbgSumW = q.sumSqrW;
     s_blocks++;
     perfRecord(&pr_slmBlock, q.procUs);
 
-    if (xQueueSend(s_q, &q, 0) != pdTRUE) perfCount(ct_slmDrop);   // calc task too slow
+    if (xQueueSend(s_q, &q, 0) != pdTRUE) perfCount(ct_slmDrop);   // queue full
   }
 }
 
-// -------------------------------------------------------------- calc task ---
+// calculation task
 #if SLM_ENABLE_FFT
 static void runFft() {
   PerfScope scope(pr_slmFft);
@@ -194,7 +188,7 @@ static void runFft() {
   s_fftReady = false;
 }
 
-static void printFft() {                             // same format as INMP441_spl.ino -> inmp441.py
+static void printFft() {                             // same format as before, for inmp441.py
   Serial.println("START");
   for (int i = 1; i < FFT_N / 2; i++) Serial.printf("%.2f,%.3f\n", (double)i * SLM_SAMPLE_RATE / FFT_N, s_vReal[i]);
   Serial.println("END");
@@ -248,7 +242,7 @@ static void slmCalcTask(void*) {
   }
 }
 
-// -------------------------------------------------------------- public API --
+// public functions
 void slmBegin() {
   s_refSq = pow(10.0, MIC_SENSITIVITY / 20.0) * (double)((1 << (MIC_BITS - 1)) - 1);
   s_refSq *= s_refSq;

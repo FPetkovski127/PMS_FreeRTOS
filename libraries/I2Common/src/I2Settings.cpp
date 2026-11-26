@@ -14,7 +14,6 @@ static I2Defaults        s_def;
 static SemaphoreHandle_t s_mtx = nullptr;
 static bool              s_fromNvs = false;
 
-// ---------------------------------------------------------------------------
 static uint32_t crc32(const uint8_t* d, size_t n) {
   uint32_t c = 0xFFFFFFFFu;
   while (n--) {
@@ -74,7 +73,6 @@ static bool writeSlots(const I2Settings& s) {
   return okA && okB;
 }
 
-// ---------------------------------------------------------------------------
 void i2cfgBegin(const I2Defaults& d) {
   s_def = d;
   if (!s_mtx) s_mtx = xSemaphoreCreateMutex();
@@ -157,7 +155,6 @@ bool i2cfgApplyCal(uint32_t version, const I2Calib cal[4]) {
   return i2cfgCommit(s);
 }
 
-// ---------------------------------------------------------------------------
 bool i2ValidChannelId(const String& s, uint32_t* out) {
   size_t n = s.length();
   if (n < I2_CHID_MIN_DIGITS || n > I2_CHID_MAX_DIGITS) return false;

@@ -14,7 +14,6 @@ struct TaskRec { TaskHandle_t h; const char* name; };
 static TaskRec s_tasks[PERF_MAX_TASKS];            static uint8_t s_nTasks = 0;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
-// ---------------------------------------------------------------------------
 BaseType_t i2CreateTask(TaskFunction_t fn, const char* name, uint32_t stackBytes,
                         void* arg, UBaseType_t prio, TaskHandle_t* out, BaseType_t core) {
   TaskHandle_t h = nullptr;
@@ -28,15 +27,13 @@ BaseType_t i2CreateTask(TaskFunction_t fn, const char* name, uint32_t stackBytes
   return r;
 }
 
-// ---------------------------------------------------------------------------
-//  Internal task watchdog helpers (declared in I2Task.h)
-// ---------------------------------------------------------------------------
+// task watchdog helpers (declared in I2Task.h)
 void i2WdtInit(uint32_t timeoutS) {
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
   esp_task_wdt_config_t c = {};
   c.timeout_ms = timeoutS * 1000;
-  c.idle_core_mask = (1 << I2_NUM_CORES) - 1;     // watch the idle task of every core
-  c.trigger_panic = true;                         // reset the chip on timeout
+  c.idle_core_mask = (1 << I2_NUM_CORES) - 1;     // idle task of every core
+  c.trigger_panic = true;                         // reset on timeout
   if (esp_task_wdt_reconfigure(&c) != ESP_OK) esp_task_wdt_init(&c);
 #else
   esp_task_wdt_init(timeoutS, true);              // true = panic -> reset
@@ -59,12 +56,8 @@ void perfRecord(PerfProbe* p, uint32_t us) {
   portEXIT_CRITICAL(&s_mux);
 }
 
-// ---------------------------------------------------------------------------
-//  CPU load through idle hooks
-//  The hook returns false (= "do not enter low-power wait") so the idle task
-//  spins and counts. Load = 1 - idleRate / idleRateAtBoot. Only active while
-//  'perf cpu on' - it costs power but nothing else.
-// ---------------------------------------------------------------------------
+// CPU load: the idle hook counts how often the idle task runs. At boot this is measured
+// once on an idle system; load = 1 - idleRate / idleRateAtBoot. Only active after 'perf cpu on'.
 static volatile uint32_t s_idleCnt[2] = {0, 0};
 static bool idleHook0() { s_idleCnt[0] = s_idleCnt[0] + 1; return false; }
 static bool idleHook1() { s_idleCnt[1] = s_idleCnt[1] + 1; return false; }
@@ -146,7 +139,6 @@ void perfCpuEnable(bool on) {
 }
 bool perfCpuEnabled() { return s_cpuOn; }
 
-// ---------------------------------------------------------------------------
 void perfReset() {
   portENTER_CRITICAL(&s_mux);
   for (uint8_t i = 0; i < s_nProbes; i++) {
@@ -214,9 +206,7 @@ void perfReport(Print& out) {
   out.println("=====================================");
 }
 
-// ---------------------------------------------------------------------------
-//  Synthetic load
-// ---------------------------------------------------------------------------
+// synthetic load
 static volatile uint8_t  s_ldPct = 0;
 static volatile uint32_t s_ldEndMs = 0;
 static volatile bool     s_ldRunning = false;

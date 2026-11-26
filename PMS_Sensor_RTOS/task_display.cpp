@@ -1,7 +1,4 @@
-// ============================================================================
-//  OLED status display (temporary - the final product shows the data on the
-//  matrix unit). Reads the latest calibrated sample, FSM state and SLM level.
-// ============================================================================
+// OLED status display (used on the bench, the matrix unit is the final display)
 #include "app_state.h"
 #include "sound_level.h"
 

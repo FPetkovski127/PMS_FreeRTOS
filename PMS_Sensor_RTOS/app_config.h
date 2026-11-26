@@ -1,67 +1,59 @@
 #pragma once
-// ============================================================================
-//  PMS_Sensor_RTOS - ALL tunable constants live here
-// ============================================================================
+// constants of the sensor unit
 #include <Arduino.h>
 #include "I2Common.h"
 
 #define FW_VERSION            "2.0-rtos"
 
-// ---------------------------------------------------------------- features --
-#define ENABLE_SLM            1        // sound level meter (INMP441). 0 = PMS only
-#define SLM_ENABLE_FFT        1        // on-demand spectrum ('slm fft'), needs arduinoFFT
-#define ENABLE_OLED           1        // temporary display (final product: matrix unit)
+// features
+#define ENABLE_SLM            1        // sound level meter (INMP441)
+#define SLM_ENABLE_FFT        1        // spectrum on request ('slm fft'), needs arduinoFFT
+#define ENABLE_OLED           1        // OLED used on the bench, the matrix unit is the final display
 
-// Test switch for the real-time analysis: 1 = put EVERY task on core 0 so the
-// ESP32 NodeMCU behaves like the single-core ESP32-S2 mini.
+// 1 = all tasks on core 0 (behaves like the single-core ESP32-S2)
 #define TEST_SINGLE_CORE      0
 
-// -------------------------------------------------------------------- pins --
-#define PIN_PMS_SET           4        // PMS5003T SET   (HIGH = fan on, LOW = sleep)
-#define PIN_PMS_RX            16       // ESP32 RX  <- PMS TX
-#define PIN_PMS_TX            17       // ESP32 TX  -> PMS RX
+// pins
+#define PIN_PMS_SET           4        // PMS5003T SET (HIGH = fan on, LOW = sleep)
+#define PIN_PMS_RX            16       // ESP32 RX <- PMS TX
+#define PIN_PMS_TX            17       // ESP32 TX -> PMS RX
 #define PIN_LED               2
-#define OLED_ADDRESS          0x3C     // I2C: SDA 21 / SCL 22 (ESP32 default)
+#define OLED_ADDRESS          0x3C     // I2C, SDA 21 / SCL 22
 
 #define PIN_I2S_SCK           32       // INMP441 SCK
 #define PIN_I2S_WS            5        // INMP441 WS
-#define PIN_I2S_SD            33       // INMP441 SD   (L/R pin of the mic -> GND)
+#define PIN_I2S_SD            33       // INMP441 SD (L/R pin to GND)
 
-// I2S microphone options. If the level stays at the minimum (raw data all zero):
-//  * the mic L/R pin to GND = LEFT slot, to 3.3 V = RIGHT slot
-//  * the newer Arduino-ESP32 cores swapped LEFT/RIGHT in the legacy driver. On the bench
-//    unit (mic L/R pin on GND) LEFT gave all zeros and RIGHT worked, so RIGHT is the default.
-#define SLM_I2S_CHANNEL       I2S_CHANNEL_FMT_ONLY_RIGHT     // or I2S_CHANNEL_FMT_ONLY_LEFT
-#define SLM_USE_APLL          0        // 1 = audio PLL (more accurate 48 kHz), 0 = default clock (known to work)
+// With the L/R pin on GND the left channel gave only zeros on this core version,
+// the right channel works. Use I2S_CHANNEL_FMT_ONLY_LEFT if it is the other way round.
+#define SLM_I2S_CHANNEL       I2S_CHANNEL_FMT_ONLY_RIGHT
+#define SLM_USE_APLL          0
 
-// Internal watchdog (ESP32 task watchdog, no external parts needed): the chip
-// is reset if the PMS state machine or an idle task does not report in time.
+// task watchdog timeout, the chip resets when a watched task hangs
 #define WDT_TIMEOUT_S         10
 
-// ----------------------------------------------------------- FSM timings ----
-#define PMS_WARMUP_MS         30000UL  // state 1: fan on, sensor warming up (data discarded)
-#define PMS_MEASURE_MS        30000UL  // state 2: normal mode, collect samples -> average -> ThingSpeak
-#define PMS_FAST_WINDOW_MS    60000UL  // fast mode: window between two ThingSpeak updates
-#define PMS_SLEEP_DEFAULT_S   240      // state 3 (normal mode only); runtime value = 'set sleep'
-#define PMS_LOOP_MS           50       // FSM / UART polling period
-#define LED_NORMAL_MS         500      // LED toggle period, normal mode
-#define LED_FAST_MS           250      // LED toggle period, fast mode
+// state machine timing
+#define PMS_WARMUP_MS         30000UL  // fan on, data discarded
+#define PMS_MEASURE_MS        30000UL  // samples are collected and averaged (normal mode)
+#define PMS_FAST_WINDOW_MS    60000UL  // measuring window in fast mode
+#define PMS_SLEEP_DEFAULT_S   240      // sleep time in normal mode, changeable with 'set sleep'
+#define PMS_LOOP_MS           50       // loop period of the state machine
+#define LED_NORMAL_MS         500      // LED toggle period
+#define LED_FAST_MS           250
 
-// -------------------------------------------------------------- ThingSpeak --
-#define TS_MIN_GAP_MS         16000UL  // free account: >= 15 s between writes
+// ThingSpeak
+#define TS_MIN_GAP_MS         16000UL  // minimum time between two writes
 #define TS_RETRIES            3
 #define TS_RETRY_WAIT_MS      20000UL
-#define CAL_FIRST_CHECK_MS    60000UL  // first calibration check after boot
+#define CAL_FIRST_CHECK_MS    60000UL  // calibration channel: first check after boot
 #define CAL_CHECK_PERIOD_MS   3600000UL// then every hour
 #define CAL_RETRY_MS          600000UL // after a failed check
 
-// ----------------------------------------------- task layout (RTOS design) --
-// Priority: higher number = more urgent. Rate-monotonic idea: the shortest /
-// most time-critical period gets the highest priority.
-#define PRIO_PERF             5        // perf sampler (sleeps 1 s, runs ~us)
-#define PRIO_SLM_READER       4        // I2S block every 125 ms - must never be late
-#define PRIO_PMS              3        // FSM + UART, 50 ms
-#define PRIO_TS               2        // HTTP (blocking, seconds)
+// task priorities (higher number = higher priority)
+#define PRIO_PERF             5
+#define PRIO_SLM_READER       4
+#define PRIO_PMS              3
+#define PRIO_TS               2
 #define PRIO_SLM_CALC         2
 #define PRIO_DISPLAY          1
 #define PRIO_LED              1
@@ -70,19 +62,18 @@
   #define CORE_NET            0
   #define CORE_SLM            0
 #else
-  #define CORE_NET            I2_CORE_PRO   // WiFi lives here -> PMS/TS/OLED next to it
-  #define CORE_SLM            I2_CORE_APP   // sound processing on its own core
+  #define CORE_NET            I2_CORE_PRO   // same core as the WiFi stack
+  #define CORE_SLM            I2_CORE_APP
 #endif
 
-// ---------------------------------------------------------- PMS5003T frame --
-#define PMS_USE_ATMOSPHERIC   1        // 1 = "atmospheric environment" PM values, 0 = CF=1 (factory)
-#define PMS_QUEUE_LEN         4        // averaged results waiting for the ThingSpeak task
+// PMS5003T frame
+#define PMS_USE_ATMOSPHERIC   1        // 1 = atmospheric PM values, 0 = CF=1 values
+#define PMS_QUEUE_LEN         4        // averages waiting for the upload task
 
-// ---------------------------------------------------------- factory values --
+// factory values
 #define DEFAULT_CHANNEL_ID    3095045UL
 #define DEFAULT_WRITE_KEY     "WKQQSKL49OZQKBB6"
-// Calibration used until a unit-specific set is stored (gain, offset).
-// Move the values that were hard-coded in the old PMS5003T.h here.
+// default calibration {gain, offset}, used until other values are stored
 #define DEFAULT_CAL_PM25      {1.0f, 0.0f}
 #define DEFAULT_CAL_PM10      {1.0f, 0.0f}
 #define DEFAULT_CAL_TEMP      {1.0f, 0.0f}

@@ -38,7 +38,6 @@ void i2wifiPrintStatus(Print& out) {
   }
 }
 
-// ---------------------------------------------------------------------------
 static bool connectTo(const char* ssid, const char* pass) {
   Serial.printf("[wifi] connecting to '%s' ...\n", ssid);
   WiFi.disconnect(false, false);
@@ -80,15 +79,12 @@ static void otaStart() {
   s_otaBegun = true;
 }
 
-// ---------------------------------------------------------------------------
-//  Config portal (WiFiManager). Blocks the supervisor task for up to 3 min;
-//  all other tasks keep running.
-// ---------------------------------------------------------------------------
+// config portal (WiFiManager); blocks this task for up to 3 min, other tasks keep running
 static WiFiManager* s_wm = nullptr;
 static bool   s_pGot = false;
 static String s_pCode, s_pCh, s_pKey, s_pMode;
 
-static void portalSaveCb() {                       // runs when the portal form is submitted
+static void portalSaveCb() {                       // called when the portal form is submitted
   if (!s_wm) return;
   s_pCode = s_wm->server->arg("accesscode");
   s_pCh   = s_wm->server->arg("channelnum");
@@ -125,7 +121,7 @@ static bool runPortal() {
   wm.setBreakAfterConfig(true);
   bool connected = wm.startConfigPortal(d.apSsid, d.apPass);
   s_wm = nullptr;
-  WiFi.softAPdisconnect(true);                     // make sure the AP is gone
+  WiFi.softAPdisconnect(true);                     // close the AP
   WiFi.mode(WIFI_STA);
 
   bool saved = false;
@@ -158,7 +154,7 @@ static void wifiTask(void*) {
   uint32_t downSince = millis();
   uint32_t connectedAt = 0;
   uint32_t otaErrAt = 0;
-  uint32_t lastPortal = 0;                               // 0 = never opened since boot
+  uint32_t lastPortal = 0;                               // 0 = not opened since boot
 
   for (;;) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -177,11 +173,11 @@ static void wifiTask(void*) {
         s_portalRequested = false;
         runPortal();
         lastPortal = millis();
-        downSince = millis();                            // outage clock restarts after the portal
-        wasConnected = false;                            // re-run the connected branch (OTA restart)
+        downSince = millis();                            // restart the outage timer
+        wasConnected = false;                            // runs the "just connected" part again (OTA restart)
         continue;
       }
-      if (g_i2OtaPercent == -2) {                        // show OTA error for 5 s only
+      if (g_i2OtaPercent == -2) {                        // OTA error is shown for 5 s
         if (!otaErrAt) otaErrAt = millis();
         if (millis() - otaErrAt > 5000) { g_i2OtaPercent = -1; otaErrAt = 0; }
       }
@@ -196,7 +192,7 @@ static void wifiTask(void*) {
       continue;
     }
 
-    // ----- not connected -----
+    // not connected
     if (wasConnected) {
       wasConnected = false;
       downSince = millis();
@@ -248,10 +244,10 @@ static void wifiTask(void*) {
 void i2wifiBegin() {
   const I2Defaults& d = i2cfgDefaults();
   WiFi.persistent(false);
-  WiFi.setAutoReconnect(false);          // the supervisor owns reconnection
+  WiFi.setAutoReconnect(false);          // reconnecting is done by wifiTask
   WiFi.setHostname(d.hostname);
-  WiFi.mode(WIFI_STA);                   // normal operation is STA only; the AP exists only inside runPortal()
-  WiFi.setSleep(false);                  // more reliable link, slightly more power
+  WiFi.mode(WIFI_STA);                   // the AP is only opened inside runPortal()
+  WiFi.setSleep(false);                  // no WiFi power save
   otaSetup();
   i2CreateTask(wifiTask, "wifiTask", 6144, NULL, 2, NULL, I2_CORE_PRO);
 }

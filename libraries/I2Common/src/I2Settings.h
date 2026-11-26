@@ -1,23 +1,12 @@
 #pragma once
-// ============================================================================
-//  I2Settings - persistent settings in ESP32 NVS (flash) with power-loss and
-//  corruption protection.
-//
-//  Why NVS instead of EEPROM emulation:
-//   * NVS is wear-levelled and every entry carries its own CRC; an entry is
-//     written as a NEW entry and the old one is invalidated afterwards, so a
-//     reset / power loss during a write leaves either the old or the new value.
-//   * On top of that the whole settings block is stored TWICE (slot A / slot B)
-//     with a magic number, version, size and CRC32. At boot the first valid
-//     slot wins; a damaged slot is repaired from the good one.
-//   * Every write is read back and verified.
-//   * Nothing is written when the values did not change (flash wear).
-// ============================================================================
+// Settings stored in the ESP32 NVS (flash).
+// The whole structure is written twice (slot A and B) with a CRC32, read back after
+// every write and only written when something changed.
 #include <Arduino.h>
 
 #define I2_SETTINGS_VERSION 1
-#define I2_CHID_MIN_DIGITS  6      // ThingSpeak channel IDs: 6 digits (old) ...
-#define I2_CHID_MAX_DIGITS  8      // ... 7 digits today (3.2 M channels), 8 = headroom
+#define I2_CHID_MIN_DIGITS  6      // accepted ThingSpeak channel ID length
+#define I2_CHID_MAX_DIGITS  8
 #define I2_API_KEY_LEN      16
 
 enum I2Role : uint8_t { I2_ROLE_SENSOR = 1, I2_ROLE_MATRIX = 2 };
@@ -48,7 +37,7 @@ struct I2Settings {
   uint32_t crc;             // CRC32 of everything above (must stay last)
 };
 
-// Factory values handed over by the sketch (library code cannot see sketch macros).
+// Factory values passed in by the sketch.
 struct I2Defaults {
   I2Role      role;
   const char* fwVersion;
@@ -62,20 +51,20 @@ struct I2Defaults {
   const char* svcSsid;      // service network (phone hotspot) - may be ""
   const char* svcPass;
   const char* otaPass;
-  const char* apSsid;       // config-portal access point (opens only when needed)
-  const char* apPass;       // WPA2 password of that access point (8+ chars)
+  const char* apSsid;       // config portal access point
+  const char* apPass;       // its WPA2 password (8+ chars)
   uint16_t    sleepSec;
   I2Calib     pm25, pm10, temp, humid;
 };
 
-// --- lifecycle --------------------------------------------------------------
+// lifecycle
 void  i2cfgBegin(const I2Defaults& d);
 const I2Defaults& i2cfgDefaults();
 bool  i2cfgLoadedFromNvs();
 
-// --- access (thread safe) ---------------------------------------------------
+// access (thread safe)
 void     i2cfgSnapshot(I2Settings& out);
-bool     i2cfgCommit(const I2Settings& next);      // validate-free: callers validate
+bool     i2cfgCommit(const I2Settings& next);      // callers validate the values
 bool     i2cfgFactoryReset();
 bool     i2cfgCheckAccessCode(const char* code);   // constant-time compare
 uint8_t  i2cfgFastMode();
@@ -84,11 +73,11 @@ float    i2cfgSlmOffsetDb();
 void     i2cfgGetCal(I2Calib out[4]);              // pm25, pm10, temp, humid
 bool     i2cfgApplyCal(uint32_t version, const I2Calib cal[4]);
 
-// --- validation helpers -----------------------------------------------------
+// validation
 bool i2ValidChannelId(const String& s, uint32_t* out);   // 6..8 digits, no leading 0
 bool i2ValidApiKey(const String& s);                     // exactly 16 [A-Za-z0-9]
 bool i2CalSane(const I2Calib& c);                        // gain 0.1..10, |offset| <= 500
-// "version,g25,o25,g10,o10,gT,oT,gH,oH"
+// calibration string: "version,g25,o25,g10,o10,gT,oT,gH,oH"
 bool i2CalParseCsv(const char* csv, uint32_t* version, I2Calib out[4]);
 inline float i2CalApply(const I2Calib& c, float raw) { return c.gain * raw + c.offset; }
 

@@ -16,10 +16,9 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
- * MODIFIED for this project: the Xtensa-LX6 FPU assembly is only used on the
- * classic ESP32. Other chips (ESP32-S2 has NO hardware FPU, ESP32-C3 is RISC-V)
- * use the plain C++ implementation below, which computes exactly the same thing.
- * Include this file from ONE translation unit only (it defines functions).
+ * Modified: the Xtensa assembly is only used on the classic ESP32, other chips (for example
+ * the ESP32-S2, which has no FPU) use the C++ version below with the same maths.
+ * Include this file in one source file only.
  */
 
 #ifndef SOS_IIR_FILTER_H

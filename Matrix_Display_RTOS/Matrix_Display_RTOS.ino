@@ -1,17 +1,10 @@
-// ============================================================================
-//  Matrix display unit - FreeRTOS version
+// Matrix display unit (FreeRTOS)
 //
-//  Tasks:   ts_read (2)  reads the 4(+1) fields from ThingSpeak every 30 s
-//           display (3)  scrolling text on the NeoPixel matrix
-//           wifiTask (2) connection supervisor + OTA  (library I2Common)
-//           console (1)  serial commands               (library I2Common)
-//
-//  "Connecting.." problem: the old code called WiFi.reconnect() forever. The
-//  supervisor in I2Common now escalates: new connect attempt -> configured net
-//  then service net -> WiFi stack off/on after 2 min -> ESP restart after 10 min.
-//  This sketch additionally restarts when WiFi is up but no ThingSpeak read
-//  succeeded for NO_DATA_RESTART_MS.
-// ============================================================================
+// Tasks: ts_read (2) reads the values from ThingSpeak every 30 s, display (3) scrolls the text,
+// wifiTask (2) and console (1) come from the I2Common library.
+// The WiFi supervisor in the library reconnects (configured network, then service network,
+// WiFi stack reset after 2 min, restart after 10 min). This sketch also restarts the unit
+// when WiFi is up but no ThingSpeak read worked for NO_DATA_RESTART_MS.
 #include "app_config.h"
 #include <WiFi.h>
 #include <ThingSpeak.h>
@@ -22,7 +15,7 @@
 Adafruit_NeoMatrix matrix = Adafruit_NeoMatrix(
   MATRIX_W, MATRIX_H, PIN_DIN,
   NEO_MATRIX_TOP + NEO_MATRIX_LEFT + NEO_MATRIX_COLUMNS + NEO_MATRIX_ZIGZAG,
-  NEO_GRB + NEO_KHZ800);   // origin top-left, column-major, every second column reversed (zig-zag)
+  NEO_GRB + NEO_KHZ800);   // origin top left, columns, zig-zag wiring
 
 #define WHITE  matrix.Color(255, 255, 255)
 #define RED    matrix.Color(255, 0, 0)
@@ -32,7 +25,7 @@ Adafruit_NeoMatrix matrix = Adafruit_NeoMatrix(
 #define ORANGE matrix.Color(255, 165, 0)
 #define LIME   matrix.Color(50, 205, 50)
 
-// ----------------------------------------------------------------- data -----
+// data
 struct MatrixData { int temp, humid, pm2_5, pm10, noise; };   // noise < 0 = not available
 
 static const I2Defaults DEFAULTS = {
@@ -47,7 +40,7 @@ static const I2Defaults DEFAULTS = {
 };
 
 static WiFiClient   s_client;
-static QueueHandle_t s_dataQ = nullptr;                     // length 1, always holds the newest reading
+static QueueHandle_t s_dataQ = nullptr;                     // length 1, holds the newest reading
 static volatile uint32_t s_lastOkMs = 0;
 static volatile int      s_lastStatus = 0;
 
@@ -55,14 +48,14 @@ static PerfProbe   pr_tsRead = PERF_PROBE_INIT("ts_read_http", 0);
 static PerfProbe   pr_frame  = PERF_PROBE_INIT("matrix_frame", SCROLL_DELAY_MS * 1000UL);
 static PerfCounter ct_readFail = PERF_COUNTER_INIT("ts_read_failed");
 
-// --------------------------------------------------------------- colours -----
+// colours
 static uint16_t colorTemp(int t)  { return t < 10 ? BLUE : t < 20 ? YELLOW : t < 30 ? ORANGE : RED; }
 static uint16_t colorHumid(int h) { return h < 30 ? LIME : h < 60 ? YELLOW : ORANGE; }
 static uint16_t colorPM25(int p)  { return p < 35 ? GREEN : p < 53 ? YELLOW : p < 70 ? ORANGE : RED; }
 static uint16_t colorPM10(int p)  { return p < 50 ? GREEN : p < 75 ? YELLOW : p < 100 ? ORANGE : RED; }
 static uint16_t colorNoise(int n) { return n < 55 ? GREEN : n < 70 ? YELLOW : n < 85 ? ORANGE : RED; }
 
-// ----------------------------------------------------------- ThingSpeak task --
+// ThingSpeak task
 static void tsReadTask(void*) {
   ThingSpeak.begin(s_client);
   s_lastOkMs = millis();
@@ -104,7 +97,7 @@ static void tsReadTask(void*) {
   }
 }
 
-// -------------------------------------------------------------- display task --
+// display task
 struct Seg { String text; uint16_t color; };
 
 static int buildSegments(const MatrixData& d, Seg* s) {
@@ -179,7 +172,7 @@ static void displayTask(void*) {
   }
 }
 
-// --------------------------------------------------------------- console -----
+// console
 static bool matrixExt(const String& cmd, const String& args) {
   if (cmd != "perf") return false;
   if (args.length() == 0)    perfReport(Serial);
@@ -195,7 +188,7 @@ static void matrixStatus() {
                 (unsigned long)((millis() - s_lastOkMs) / 1000));
 }
 
-// --------------------------------------------------------------- setup/loop --
+// setup / loop
 void setup() {
   Serial.begin(115200);
   delay(500);
